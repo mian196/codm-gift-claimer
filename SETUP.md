@@ -1,6 +1,6 @@
 # 🛠️ GitHub Actions Setup & Security Guide
 
-This guide will show you how to securely set up the **CODM Daily Free Gift Claimer** to run automatically in the cloud every day at **5:00 AM** using **GitHub Actions**.
+This guide will show you how to securely set up the **CODM Daily Free Gift Claimer** to run automatically in the cloud every day at **5:00 AM** and send gorgeous, instant alerts to your **Discord** channel.
 
 ---
 
@@ -29,70 +29,53 @@ To prevent anyone else from seeing your Call of Duty: Mobile Player UIDs, you sh
 
 ---
 
-## 🤖 Step 2: Create the GitHub Actions Workflow
+## 💬 Step 2: Set Up Discord Webhook Notifications (Optional)
 
-To tell GitHub to run the claimer script automatically every day at 5:00 AM, create a workflow file.
+Receive instant status notifications in your Discord server whenever a claim attempt is made.
 
-1. In the root of your repository, create a directory structure: `.github/workflows/`
-2. Create a file inside that directory named `claim_rewards.yml`:
-   ```yaml
-   name: CODM Daily Gift Claimer
-
-   on:
-     schedule:
-       # Runs every day at 5:00 AM UTC (adjust the hour to fit your local time)
-       - cron: '0 5 * * *'
-     workflow_dispatch:
-       # Allows you to manually trigger the claim flow from the GitHub Actions tab
-
-   jobs:
-     claim:
-       runs-on: ubuntu-latest
-
-       steps:
-       - name: Check out repository code
-         uses: actions/checkout@v4
-
-       - name: Set up Python
-         uses: actions/setup-python@v5
-         with:
-           python-version: '3.11'
-
-       - name: Install dependencies
-         run: |
-           python -m pip install --upgrade pip
-           pip install playwright pytest pytest-mock anyio
-           python -m playwright install chromium
-           npx playwright install-deps chromium
-
-       - name: Execute claimer script
-         env:
-           # Pass your secure profiles from GitHub Secrets as an environment variable
-           CODM_PROFILES: ${{ secrets.CODM_PROFILES }}
-         run: python claimer.py
+1. In Discord, navigate to the channel where you want to receive logs.
+2. Open the channel settings (Edit Channel ⚙️) -> **Integrations** -> **Webhooks**.
+3. Click **Create Webhook** (or **New Webhook**).
+4. Give it a custom name (e.g., `CODM Claimer`), and copy the **Webhook URL**.
+5. Back in your GitHub repository, navigate to **Settings** ⚙️ -> **Secrets and variables** -> **Actions**.
+6. Click **New repository secret**.
+7. Set the **Name** to:
+   ```env
+   DISCORD_WEBHOOK_URL
    ```
+8. Set the **Value** to your copied Discord Webhook URL.
+9. Click **Add secret**.
 
 ---
 
-## ⏰ Step 3: Understanding the Cron Schedule (UTC vs Local)
+## 🤖 Step 3: Understand the GitHub Actions Workflow
+
+We've already configured your workflow file `.github/workflows/claim_rewards.yml` to:
+- Automatically trigger every day.
+- Fetch the secure `CODM_PROFILES` and `DISCORD_WEBHOOK_URL` values at runtime.
+- Run Playwright and execute the python claimer in the cloud.
+
+---
+
+## ⏰ Step 4: Configuring Your Cron Schedule (UTC vs Local)
 
 GitHub Actions runs schedules on **Coordinated Universal Time (UTC)**. 
 
-If you want the workflow to run at **5:00 AM in your local timezone**, you need to convert it to UTC. Here are some examples:
+To edit when the script runs, open `.github/workflows/claim_rewards.yml` and modify the `cron` parameter. Here is how to convert **5:00 AM local time** to UTC for various timezones:
 
 | Target Local Time | Timezone | UTC Cron Expression |
 | :--- | :--- | :--- |
-| **5:00 AM** | Pakistan Standard Time (PKT, UTC+5) | `0 0 * * *` (midnight UTC) |
-| **5:00 AM** | Greenwich Mean Time (GMT, UTC+0) | `0 5 * * *` (5:00 AM UTC) |
-| **5:00 AM** | Eastern Standard Time (EST, UTC-5) | `0 10 * * *` (10:00 AM UTC) |
-| **5:00 AM** | Pacific Standard Time (PST, UTC-8) | `0 13 * * *` (1:00 PM UTC) |
+| **5:00 AM** | Pakistan Standard Time (PKT, UTC+5) | `- cron: '0 0 * * *'` (midnight UTC) |
+| **5:00 AM** | Greenwich Mean Time (GMT, UTC+0) | `- cron: '0 5 * * *'` (5:00 AM UTC) |
+| **5:00 AM** | Eastern Standard Time (EST, UTC-5) | `- cron: '0 10 * * *'` (10:00 AM UTC) |
+| **5:00 AM** | Pacific Standard Time (PST, UTC-8) | `- cron: '0 13 * * *'` (1:00 PM UTC) |
 
 > [!NOTE]
-> GitHub Actions schedules can sometimes be delayed by a few minutes depending on server load on GitHub's end. This is normal and expected.
+> GitHub Actions schedules can sometimes be slightly delayed by a few minutes depending on server load on GitHub's side. This is normal and expected.
 
 ---
 
-## 🚀 Step 4: Manually Trigger the Workflow (Verification)
+## 🚀 Step 5: Manually Trigger the Workflow (Verification)
 
 To verify that everything is configured correctly without waiting for 5:00 AM:
 
@@ -100,4 +83,4 @@ To verify that everything is configured correctly without waiting for 5:00 AM:
 2. Click the **Actions** tab at the top.
 3. In the left sidebar, click **CODM Daily Gift Claimer**.
 4. Click the **Run workflow** dropdown button on the right side and click **Run workflow**.
-5. Once the job completes, click into the logs to verify that the script successfully logged in and claimed the gift!
+5. Once the job completes, check your Discord channel! You'll receive a gorgeous rich embed showing the claim status.

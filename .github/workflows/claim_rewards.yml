@@ -29,6 +29,7 @@ jobs:
 
     - name: Execute claimer script
       env:
-        # Pass your secure profiles from GitHub Secrets as an environment variable
+        # Pass your secure profiles and discord webhook from GitHub Secrets as environment variables
         CODM_PROFILES: ${{ secrets.CODM_PROFILES }}
+        DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       run: python claimer.py

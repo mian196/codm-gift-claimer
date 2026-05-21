@@ -8,7 +8,7 @@ import subprocess
 import urllib.request
 import urllib.error
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from playwright.sync_api import sync_playwright, Error
 
 # Initialize named logger
@@ -85,95 +85,76 @@ def wait_for_internet(max_timeout=60):
     logger.error(f"Failed to establish internet connection to store.callofdutymobile.com within {max_timeout} seconds.")
     return False
 
-def load_profiles(config_path="config/profiles.json"):
+def load_profiles():
     """
-    Loads user profiles from either the CODM_PROFILES environment variable (JSON array)
-    or falls back to the configuration JSON file.
+    Loads user profiles strictly from the CODM_PROFILES environment variable (JSON array).
     Each profile should contain 'name' and 'uid'.
     """
     env_profiles = os.environ.get("CODM_PROFILES")
-    if env_profiles:
-        try:
-            profiles = json.loads(env_profiles)
-            if isinstance(profiles, list):
-                logger.info("Successfully loaded profiles from CODM_PROFILES environment variable.")
-                return profiles
-            else:
-                logger.warning("CODM_PROFILES environment variable is not a JSON array. Falling back to file.")
-        except Exception as e:
-            logger.warning(f"Failed to parse CODM_PROFILES environment variable: {e}. Falling back to file.")
-
-    if not os.path.exists(config_path):
-        logger.warning(f"Warning: Configuration file not found at '{config_path}'. Returning empty list.")
+    if not env_profiles:
+        logger.error("CODM_PROFILES environment variable is missing or empty. Please set it as a GitHub Secret.")
         return []
+        
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            profiles = json.load(f)
-            if not isinstance(profiles, list):
-                logger.warning(f"Warning: Configuration at '{config_path}' must be a JSON array. Returning empty list.")
-                return []
+        profiles = json.loads(env_profiles)
+        if isinstance(profiles, list):
+            logger.info("Successfully loaded profiles from CODM_PROFILES environment variable.")
             return profiles
-    except json.JSONDecodeError as e:
-        logger.warning(f"Warning: Failed to parse malformed JSON at '{config_path}': {e}. Returning empty list.")
-        return []
+        else:
+            logger.error("CODM_PROFILES environment variable is not a JSON array. Please verify your secret.")
+            return []
     except Exception as e:
-        logger.warning(f"Warning: Unexpected error reading '{config_path}': {e}. Returning empty list.")
+        logger.error(f"Failed to parse CODM_PROFILES environment variable JSON: {e}")
         return []
 
-def load_claims(state_path="state/claims.json"):
+def send_discord_notification(webhook_url, player_name, uid, status, error_msg=None):
     """
-    Loads historical claim attempt records from the state JSON file.
-    Returns a JSON array of claim records.
+    Sends a structured rich embed notification to a Discord Webhook.
     """
-    if not os.path.exists(state_path):
-        return []
+    if not webhook_url:
+        return
+        
+    color = 3066993 if status == "success" else 15158332
+    title = "🎮 CODM Daily Free Gift Claimed!" if status == "success" else "❌ CODM Daily Free Gift Failure!"
+    description = "Successfully claimed the daily free reward on the CODM Official Store!" if status == "success" else "Failed to claim the daily free reward."
+    
+    embed = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "fields": [
+            {"name": "Player Name", "value": player_name, "inline": True},
+            {"name": "Player UID", "value": f"`{uid}`", "inline": True}
+        ],
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "footer": {
+            "text": "CODM Daily Gift Claimer | Automated with GitHub Actions"
+        }
+    }
+    
+    if error_msg:
+        embed["fields"].append({"name": "Error Details", "value": f"```{error_msg}```", "inline": False})
+        
+    payload = {
+        "embeds": [embed]
+    }
+    
     try:
-        with open(state_path, "r", encoding="utf-8") as f:
-            claims = json.load(f)
-            if not isinstance(claims, list):
-                logger.warning(f"Warning: State at '{state_path}' must be a JSON array. Returning empty list.")
-                return []
-            return claims
-    except json.JSONDecodeError as e:
-        logger.warning(f"Warning: Failed to parse malformed JSON at '{state_path}': {e}. Returning empty list.")
-        return []
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            webhook_url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status not in (200, 204):
+                logger.warning(f"Discord Webhook returned status code: {response.status}")
     except Exception as e:
-        logger.warning(f"Warning: Unexpected error reading '{state_path}': {e}. Returning empty list.")
-        return []
-
-def save_claim(uid, name, status, state_path="state/claims.json"):
-    """
-    Appends a claim execution record to state/claims.json.
-    """
-    os.makedirs(os.path.dirname(state_path), exist_ok=True)
-    claims = load_claims(state_path)
-    claims.append({
-        "uid": uid,
-        "name": name,
-        "timestamp": datetime.now().isoformat(),
-        "status": status
-    })
-    try:
-        with open(state_path, "w", encoding="utf-8") as f:
-            json.dump(claims, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.warning(f"Warning: Failed to write state to '{state_path}': {e}")
-
-def is_already_claimed_today(uid, state_path="state/claims.json"):
-    """
-    Checks if a profile has already been claimed successfully on the current local calendar day.
-    """
-    claims = load_claims(state_path)
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    for claim in claims:
-        if claim.get("uid") == uid and claim.get("status") == "success":
-            try:
-                claim_date = claim.get("timestamp", "").split("T")[0]
-                if claim_date == date_str:
-                    return True
-            except Exception:
-                continue
-    return False
+        logger.error(f"Failed to send Discord notification: {e}")
 
 def ensure_playwright_installed():
     """
@@ -229,52 +210,7 @@ def human_delay(min_sec=1.0, max_sec=3.0):
     """Sleeps for a random duration to simulate human timing."""
     time.sleep(random.uniform(min_sec, max_sec))
 
-def capture_claim_screenshot(page, uid, status):
-    """
-    Captures a full-page screenshot and saves it under logs/screenshots/[status]/
-    with the name: [status]_[uid]_[YYYY-MM-DD].png.
-    """
-    try:
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        folder = f"logs/screenshots/{status}"
-        os.makedirs(folder, exist_ok=True)
-        filepath = os.path.join(folder, f"{status}_{uid}_{date_str}.png")
-        logger.info(f"Capturing full-page screenshot: {filepath}")
-        page.screenshot(path=filepath, full_page=True)
-    except Exception as e:
-        logger.error(f"Failed to capture claim screenshot for UID {uid}: {e}")
 
-def cleanup_old_screenshots(days_threshold=30):
-    """
-    Recursively sweeps logs/screenshots/ and removes any .png files
-    that have not been modified in over days_threshold days.
-    """
-    base_dir = os.path.join("logs", "screenshots")
-    if not os.path.exists(base_dir):
-        return
-        
-    now = time.time()
-    cutoff = now - (days_threshold * 86400)
-    purged_count = 0
-    
-    logger.info(f"Running rolling screenshot cleanup sweep (older than {days_threshold} days)...")
-    for root, dirs, files in os.walk(base_dir):
-        for file in files:
-            if file.endswith(".png"):
-                filepath = os.path.join(root, file)
-                try:
-                    mtime = os.path.getmtime(filepath)
-                    if mtime < cutoff:
-                        os.remove(filepath)
-                        logger.info(f"Purged old screenshot: {filepath}")
-                        purged_count += 1
-                except Exception as e:
-                    logger.error(f"Error purging screenshot '{filepath}': {e}")
-                    
-    if purged_count > 0:
-        logger.info(f"Purged {purged_count} old screenshots.")
-    else:
-        logger.info("No old screenshots to purge.")
 
 def claim_profile(page, profile, visible=False):
     """
@@ -494,9 +430,12 @@ def claim_profile(page, profile, visible=False):
             except Exception:
                 pass
                 
+        webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+        
         if success_detected:
             logger.info(f"Successfully claimed Daily Free Gift for {name} ({uid})!")
-            capture_claim_screenshot(page, uid, "success")
+            if webhook_url:
+                send_discord_notification(webhook_url, name, uid, "success")
             
             # Safely dismiss the CP buy popup if visible to avoid accidental purchases
             try:
@@ -525,56 +464,18 @@ def claim_profile(page, profile, visible=False):
             return True
         else:
             logger.warning(f"Warning: No explicit success confirmation popup detected for {name}. Assuming it may have already been claimed or claimed silently.")
-            capture_claim_screenshot(page, uid, "success")
+            if webhook_url:
+                send_discord_notification(webhook_url, name, uid, "success")
             return True
             
     except Exception as e:
         logger.error(f"Error claiming gift for profile '{name}': {e}")
-        capture_claim_screenshot(page, uid, "fail")
+        webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+        if webhook_url:
+            send_discord_notification(webhook_url, name, uid, "failed", error_msg=str(e))
         return False
 
-def show_toast_notification(success_count: int, failed_count: int, skipped_count: int):
-    """
-    Triggers a native Windows Toast Notification displaying daily claim results
-    via a PowerShell subprocess. Safely returns immediately on non-Windows platforms.
-    """
-    if sys.platform != "win32":
-        return
 
-    title = "CODM Daily Gift Claimer"
-    
-    if success_count == 0 and failed_count == 0 and skipped_count > 0:
-        message = f"All {skipped_count} profile(s) already successfully claimed today!"
-        icon = "Information"
-    elif success_count > 0 and failed_count == 0:
-        message = f"Successfully claimed free rewards for all {success_count} profile(s) today!"
-        icon = "Information"
-    elif success_count > 0 and failed_count > 0:
-        message = f"Claiming complete. Success: {success_count}, Failed: {failed_count}."
-        icon = "Warning"
-    elif success_count == 0 and failed_count > 0:
-        message = f"Failed to claim daily rewards for any profile today (Failed: {failed_count})."
-        icon = "Error"
-    else:
-        message = "No profiles were processed today."
-        icon = "Information"
-        
-    powershell_code = f"""
-    [void] [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
-    $notification = New-Object System.Windows.Forms.NotifyIcon
-    $notification.Icon = [System.Drawing.SystemIcons]::Information
-    $notification.BalloonTipIcon = '{icon}'
-    $notification.BalloonTipTitle = '{title}'
-    $notification.BalloonTipText = '{message}'
-    $notification.Visible = $true
-    $notification.ShowBalloonTip(5000)
-    Start-Sleep -Seconds 1
-    $notification.Dispose()
-    """
-    try:
-        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", powershell_code], capture_output=True)
-    except Exception:
-        pass
 
 def main():
     parser = argparse.ArgumentParser(description="Call of Duty: Mobile Store Daily Free Gift Claimer")
@@ -583,37 +484,30 @@ def main():
         action="store_true", 
         help="Run browser headfully (visible window) for debugging."
     )
-    parser.add_argument(
-        "--config", "-c", 
-        default="config/profiles.json", 
-        help="Path to the JSON profiles configuration file. Default: config/profiles.json"
-    )
     args = parser.parse_args()
     
-    # 1. Setup Logging and screen cleanup
+    # 1. Setup Logging
     setup_logging()
-    cleanup_old_screenshots()
     
     # 2. Start internet connectivity check with backoff retry
     if not wait_for_internet():
         logger.error("Internet connectivity check failed. Exiting.")
         sys.exit(1)
         
-    profiles = load_profiles(args.config)
+    profiles = load_profiles()
     if not profiles:
         logger.info("No profiles loaded. Exiting.")
         sys.exit(0)
         
-    logger.info(f"Loaded {len(profiles)} profiles from '{args.config}'.")
+    logger.info(f"Loaded {len(profiles)} profiles.")
     
     # Auto-ensure Playwright browser binaries
     ensure_playwright_installed()
     
-    # 3. Iterate profiles and claim those not yet claimed today
+    # 3. Iterate profiles and claim
     browser_started = False
     p_inst, browser, context, page = None, None, None, None
     success_count = 0
-    skipped_count = 0
     failed_count = 0
     
     try:
@@ -624,19 +518,12 @@ def main():
                 logger.warning(f"Skipping profile '{name}' because UID is missing.")
                 continue
                 
-            if is_already_claimed_today(uid):
-                logger.info(f"Skipping {name} (UID: {uid}): Already claimed today.")
-                skipped_count += 1
-                continue
-                
             # Initialize browser on demand
             if not browser_started:
                 p_inst, browser, context, page = init_browser(visible=args.visible)
                 browser_started = True
                 
             success = claim_profile(page, profile, visible=args.visible)
-            status = "success" if success else "failed"
-            save_claim(uid, name, status)
             
             if success:
                 success_count += 1
@@ -651,10 +538,7 @@ def main():
             browser.close()
             p_inst.stop()
             
-    logger.info(f"Execution finished. Successfully claimed for {success_count}/{len(profiles) - skipped_count} attempted profiles. (Skipped {skipped_count} already claimed today)")
-    
-    # Trigger native Windows Toast Notification
-    show_toast_notification(success_count, failed_count, skipped_count)
+    logger.info(f"Execution finished. Successfully claimed for {success_count}/{len(profiles)} attempted profiles.")
 
 if __name__ == "__main__":
     main()
