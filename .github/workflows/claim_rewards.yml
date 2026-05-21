@@ -36,8 +36,4 @@ jobs:
         CODM_PROFILES: ${{ secrets.CODM_PROFILES }}
         DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       run: |
-        if [ "${{ github.event_name }}" = "schedule" ]; then
-          python claimer.py --delay 30
-        else
-          python claimer.py --delay 0
-        fi
+        python claimer.py

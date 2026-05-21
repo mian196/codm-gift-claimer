@@ -48,36 +48,29 @@ Receive instant status notifications in your Discord server whenever a claim att
 
 ---
 
-## 🤖 Step 3: Understand the GitHub Actions Workflow
+## 🤖 Step 3: Upgraded Stealth Dual-Workflow Architecture
 
-We've already configured your workflow file `.github/workflows/claim_rewards.yml` to:
-- Automatically trigger every day.
-- Fetch the secure `CODM_PROFILES` and `DISCORD_WEBHOOK_URL` values at runtime.
-- Run Playwright and execute the python claimer in the cloud.
+We have implemented an industry-grade **dynamic scheduler randomizer** using a dual-workflow architecture for ultimate bot-detection evasion:
 
----
-
-## ⏰ Step 4: Configuring Your Cron Schedule (UTC vs Local)
-
-GitHub Actions runs schedules on **Coordinated Universal Time (UTC)**. 
-
-To edit when the script runs, open `.github/workflows/claim_rewards.yml` and modify the `cron` parameter. Here is how to convert **5:00 AM local time** to UTC for various timezones:
-
-| Target Local Time | Timezone | UTC Cron Expression |
-| :--- | :--- | :--- |
-| **5:00 AM** | Pakistan Standard Time (PKT, UTC+5) | `- cron: '0 0 * * *'` (midnight UTC) |
-| **5:00 AM** | Greenwich Mean Time (GMT, UTC+0) | `- cron: '0 5 * * *'` (5:00 AM UTC) |
-| **5:00 AM** | Eastern Standard Time (EST, UTC-5) | `- cron: '0 10 * * *'` (10:00 AM UTC) |
-| **5:00 AM** | Pacific Standard Time (PST, UTC-8) | `- cron: '0 13 * * *'` (1:00 PM UTC) |
-
-> [!NOTE]
-> GitHub Actions schedules can sometimes be slightly delayed by a few minutes depending on server load on GitHub's side. This is normal and expected.
+1. **Daily Planner (`schedule_randomizer.yml`)**: Runs daily at **0:00 UTC** (5:00 AM PKT). It dynamically selects a completely random hour and minute (e.g. 14:37 UTC, 3:12 UTC) for that day, updates the cron trigger in the claiming workflow, and securely pushes the updated configuration back to your repository.
+2. **Rewards Claimer (`claim_rewards.yml`)**: Natively triggered at the dynamically updated random time. Because the random trigger is resolved at the workflow level, the python execution script runs immediately upon starting without consuming runner sleep-idle time, while still retaining all randomized human mouse click delays!
 
 ---
 
-## 🚀 Step 5: Manually Trigger the Workflow (Verification)
+## ⏰ Step 4: Manually Re-shuffling the Daily Schedule (Optional)
 
-To verify that everything is configured correctly without waiting for 5:00 AM:
+If you want to manually randomize the claim execution time immediately instead of waiting for the daily midnight planner:
+
+1. Navigate to the **Actions** tab in your repository.
+2. Under the workflows list, click **Dynamic Cron Scheduler**.
+3. Click the **Run workflow** dropdown on the right side and click **Run workflow**.
+4. The workflow will run immediately, pick a new random time, update the claiming schedule, and push the commit (marked with `[skip ci]` to prevent build loops).
+
+---
+
+## 🚀 Step 5: Manually Trigger the Claimer Workflow (Verification)
+
+To verify that the claimer is functioning perfectly without waiting for the scheduled daily execution:
 
 1. Go to your repository on GitHub.
 2. Click the **Actions** tab at the top.

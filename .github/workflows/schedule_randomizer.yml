@@ -1,0 +1,65 @@
+name: Dynamic Cron Scheduler
+
+on:
+  schedule:
+    # Runs every day at 0:00 UTC (5:00 AM PKT) to schedule the next execution at a completely random time
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    # Allows you to manually trigger immediately to randomize the claim schedule at any time
+
+jobs:
+  randomize:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Randomize execution schedule
+      shell: python
+      run: |
+        import random
+        import re
+
+        # Choose a random hour between 0 and 23 UTC
+        hour = random.randint(0, 23)
+        # Choose a random minute between 0 and 59
+        minute = random.randint(0, 59)
+        cron_expr = f"{minute} {hour} * * *"
+
+        filepath = ".github/workflows/claim_rewards.yml"
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Safely find and replace the cron line
+        new_content = re.sub(
+            r"-\s*cron:\s*['\"].*?['\"]",
+            f"- cron: '{cron_expr}'",
+            content
+        )
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        print(f"Stealth Scheduler: Successfully randomized daily trigger to '{cron_expr}' UTC!")
+
+    - name: Commit and push changes
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add .github/workflows/claim_rewards.yml
+        
+        # Only commit and push if the cron schedule actually changed
+        if git diff --staged --quiet; then
+          echo "Stealth Scheduler: Randomized schedule matches the current schedule. Skipping commit."
+        else
+          git commit -m "chore(stealth): dynamically randomize daily claim schedule [skip ci]"
+          git push
+        fi
