@@ -16,9 +16,7 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Set Timezone
-      uses: szenius/set-timezone@v2.0.1
-      with:
-        timezone: Asia/Karachi
+      run: sudo timedatectl set-timezone Asia/Karachi
 
     - name: Set up Python
       uses: actions/setup-python@v5
