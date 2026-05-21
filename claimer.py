@@ -7,8 +7,36 @@ import argparse
 import subprocess
 import urllib.request
 import urllib.error
+import logging
 from datetime import datetime
 from playwright.sync_api import sync_playwright, Error
+
+# Initialize named logger
+logger = logging.getLogger("claimer")
+
+def setup_logging(log_path="logs/claimer.log"):
+    """
+    Sets up unified logging to both standard output and logs/claimer.log.
+    """
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    logger.setLevel(logging.INFO)
+    
+    # Avoid duplicate handlers
+    if not logger.handlers:
+        formatter = logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        
+        # Stream handler for stdout
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
+        
+        # File handler for log file
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
 
 def check_internet_connection(timeout=5):
     """
@@ -46,7 +74,7 @@ def wait_for_internet(max_timeout=60):
             break
             
         current_sleep = min(sleep_interval, remaining)
-        print(f"Internet offline. Retrying in {current_sleep:.1f} seconds...")
+        logger.warning(f"Internet offline. Retrying in {current_sleep:.1f} seconds...")
         time.sleep(current_sleep)
         
         if check_internet_connection():
@@ -54,7 +82,7 @@ def wait_for_internet(max_timeout=60):
             
         sleep_interval *= 2
         
-    print(f"Failed to establish internet connection to store.callofdutymobile.com within {max_timeout} seconds.")
+    logger.error(f"Failed to establish internet connection to store.callofdutymobile.com within {max_timeout} seconds.")
     return False
 
 def load_profiles(config_path="config/profiles.json"):
@@ -63,20 +91,20 @@ def load_profiles(config_path="config/profiles.json"):
     Each profile should contain 'name' and 'uid'.
     """
     if not os.path.exists(config_path):
-        print(f"Warning: Configuration file not found at '{config_path}'. Returning empty list.")
+        logger.warning(f"Warning: Configuration file not found at '{config_path}'. Returning empty list.")
         return []
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             profiles = json.load(f)
             if not isinstance(profiles, list):
-                print(f"Warning: Configuration at '{config_path}' must be a JSON array. Returning empty list.")
+                logger.warning(f"Warning: Configuration at '{config_path}' must be a JSON array. Returning empty list.")
                 return []
             return profiles
     except json.JSONDecodeError as e:
-        print(f"Warning: Failed to parse malformed JSON at '{config_path}': {e}. Returning empty list.")
+        logger.warning(f"Warning: Failed to parse malformed JSON at '{config_path}': {e}. Returning empty list.")
         return []
     except Exception as e:
-        print(f"Warning: Unexpected error reading '{config_path}': {e}. Returning empty list.")
+        logger.warning(f"Warning: Unexpected error reading '{config_path}': {e}. Returning empty list.")
         return []
 
 def load_claims(state_path="state/claims.json"):
@@ -90,14 +118,14 @@ def load_claims(state_path="state/claims.json"):
         with open(state_path, "r", encoding="utf-8") as f:
             claims = json.load(f)
             if not isinstance(claims, list):
-                print(f"Warning: State at '{state_path}' must be a JSON array. Returning empty list.")
+                logger.warning(f"Warning: State at '{state_path}' must be a JSON array. Returning empty list.")
                 return []
             return claims
     except json.JSONDecodeError as e:
-        print(f"Warning: Failed to parse malformed JSON at '{state_path}': {e}. Returning empty list.")
+        logger.warning(f"Warning: Failed to parse malformed JSON at '{state_path}': {e}. Returning empty list.")
         return []
     except Exception as e:
-        print(f"Warning: Unexpected error reading '{state_path}': {e}. Returning empty list.")
+        logger.warning(f"Warning: Unexpected error reading '{state_path}': {e}. Returning empty list.")
         return []
 
 def save_claim(uid, name, status, state_path="state/claims.json"):
@@ -116,7 +144,7 @@ def save_claim(uid, name, status, state_path="state/claims.json"):
         with open(state_path, "w", encoding="utf-8") as f:
             json.dump(claims, f, indent=2, ensure_ascii=False)
     except Exception as e:
-        print(f"Warning: Failed to write state to '{state_path}': {e}")
+        logger.warning(f"Warning: Failed to write state to '{state_path}': {e}")
 
 def is_already_claimed_today(uid, state_path="state/claims.json"):
     """
@@ -126,7 +154,6 @@ def is_already_claimed_today(uid, state_path="state/claims.json"):
     date_str = datetime.now().strftime("%Y-%m-%d")
     for claim in claims:
         if claim.get("uid") == uid and claim.get("status") == "success":
-            # Check if timestamp date matches current local date
             try:
                 claim_date = claim.get("timestamp", "").split("T")[0]
                 if claim_date == date_str:
@@ -144,13 +171,13 @@ def ensure_playwright_installed():
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             browser.close()
-    except Exception as e:
-        print("Playwright Chromium browser binaries not found. Installing automatically...")
+    except Exception:
+        logger.info("Playwright Chromium browser binaries not found. Installing automatically...")
         try:
             subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            print("Chromium installed successfully.")
+            logger.info("Chromium installed successfully.")
         except subprocess.CalledProcessError as err:
-            print(f"Error installing Chromium: {err}")
+            logger.error(f"Error installing Chromium: {err}")
             sys.exit(1)
 
 def init_browser(visible=False):
@@ -177,7 +204,6 @@ def init_browser(visible=False):
             bypass_csp=True
         )
         
-        # Additional stealth override via script evaluation
         page = context.new_page()
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         
@@ -190,6 +216,53 @@ def human_delay(min_sec=1.0, max_sec=3.0):
     """Sleeps for a random duration to simulate human timing."""
     time.sleep(random.uniform(min_sec, max_sec))
 
+def capture_claim_screenshot(page, uid, status):
+    """
+    Captures a full-page screenshot and saves it under logs/screenshots/[status]/
+    with the name: [status]_[uid]_[YYYY-MM-DD].png.
+    """
+    try:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        folder = f"logs/screenshots/{status}"
+        os.makedirs(folder, exist_ok=True)
+        filepath = os.path.join(folder, f"{status}_{uid}_{date_str}.png")
+        logger.info(f"Capturing full-page screenshot: {filepath}")
+        page.screenshot(path=filepath, full_page=True)
+    except Exception as e:
+        logger.error(f"Failed to capture claim screenshot for UID {uid}: {e}")
+
+def cleanup_old_screenshots(days_threshold=30):
+    """
+    Recursively sweeps logs/screenshots/ and removes any .png files
+    that have not been modified in over days_threshold days.
+    """
+    base_dir = os.path.join("logs", "screenshots")
+    if not os.path.exists(base_dir):
+        return
+        
+    now = time.time()
+    cutoff = now - (days_threshold * 86400)
+    purged_count = 0
+    
+    logger.info(f"Running rolling screenshot cleanup sweep (older than {days_threshold} days)...")
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith(".png"):
+                filepath = os.path.join(root, file)
+                try:
+                    mtime = os.path.getmtime(filepath)
+                    if mtime < cutoff:
+                        os.remove(filepath)
+                        logger.info(f"Purged old screenshot: {filepath}")
+                        purged_count += 1
+                except Exception as e:
+                    logger.error(f"Error purging screenshot '{filepath}': {e}")
+                    
+    if purged_count > 0:
+        logger.info(f"Purged {purged_count} old screenshots.")
+    else:
+        logger.info("No old screenshots to purge.")
+
 def claim_profile(page, profile, visible=False):
     """
     Performs the full navigation, authentication, nickname verification, 
@@ -198,19 +271,19 @@ def claim_profile(page, profile, visible=False):
     name = profile.get("name", "Unknown Player")
     uid = profile.get("uid")
     if not uid:
-        print(f"Skipping profile '{name}' because UID is missing.")
+        logger.warning(f"Skipping profile '{name}' because UID is missing.")
         return False
         
-    print(f"\n--- Processing Profile: {name} (UID: {uid}) ---")
+    logger.info(f"--- Processing Profile: {name} (UID: {uid}) ---")
     
     try:
         # Navigate to Call of Duty: Mobile Store
-        print("Navigating to Call of Duty: Mobile Store...")
+        logger.info("Navigating to Call of Duty: Mobile Store...")
         page.goto("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=30000)
         human_delay(2.0, 4.0)
         
         # Locate UID Input Field (Multi-strategy)
-        print("Locating Player ID input field...")
+        logger.info("Locating Player ID input field...")
         uid_field = None
         uid_selectors = [
             lambda p: p.get_by_placeholder("Enter Player ID"),
@@ -226,7 +299,7 @@ def claim_profile(page, profile, visible=False):
                 locator = strategy(page)
                 if locator.is_visible(timeout=2000):
                     uid_field = locator
-                    print(f"Found UID field using strategy {idx + 1}.")
+                    logger.info(f"Found UID field using strategy {idx + 1}.")
                     break
             except Exception:
                 continue
@@ -235,7 +308,7 @@ def claim_profile(page, profile, visible=False):
             raise Exception("Failed to locate the UID input field on the page.")
             
         # Simulating human-like input typing with micro-delays
-        print("Typing Player UID...")
+        logger.info("Typing Player UID...")
         uid_field.click()
         uid_field.fill("") # Clear input first
         human_delay(0.5, 1.0)
@@ -246,7 +319,7 @@ def claim_profile(page, profile, visible=False):
         human_delay(1.0, 2.5)
         
         # Locate and Click Login Button (Multi-strategy)
-        print("Locating Login button...")
+        logger.info("Locating Login button...")
         login_btn = None
         login_selectors = [
             lambda p: p.get_by_role("button", name="Login"),
@@ -262,7 +335,7 @@ def claim_profile(page, profile, visible=False):
                 locator = strategy(page)
                 if locator.is_visible(timeout=2000):
                     login_btn = locator
-                    print(f"Found Login button using strategy {idx + 1}.")
+                    logger.info(f"Found Login button using strategy {idx + 1}.")
                     break
             except Exception:
                 continue
@@ -270,41 +343,28 @@ def claim_profile(page, profile, visible=False):
         if not login_btn:
             raise Exception("Failed to locate the Login button on the page.")
             
-        print("Clicking Login...")
+        logger.info("Clicking Login...")
         login_btn.click()
         
         # Verify Player Nickname Displays on screen
-        print("Verifying player nickname...")
+        logger.info("Verifying player nickname...")
         try:
-            # We wait up to 10 seconds for the nickname to appear
             page.wait_for_selector(f"text={name}", timeout=10000)
-            print(f"Verified: {name}")
+            logger.info(f"Verified: {name}")
         except Exception:
-            # If the specific name is not found, let's see if there is any logged-in indicator
-            # or if it's an error message. Let's check for standard errors.
-            print(f"Warning: Player name '{name}' text not explicitly detected in 10s. Checking general page state...")
-            # Let's inspect if we logged in by finding elements indicating active session
-            # (e.g. Logout button, or username container)
+            logger.warning(f"Warning: Player name '{name}' text not explicitly detected in 10s. Checking general page state...")
             logout_found = page.locator("text=Logout").first.is_visible(timeout=2000) or page.locator("text=Sign Out").first.is_visible(timeout=2000)
             if logout_found:
-                print(f"Verified: Session is active (Logout/Sign Out option visible), assuming successfully logged in.")
+                logger.info("Verified: Session is active (Logout/Sign Out option visible), assuming successfully logged in.")
             else:
                 raise Exception(f"Login validation failed for UID '{uid}'. Nickname '{name}' not found and no active session detected.")
 
         human_delay(2.0, 3.5)
         
-        # Locate Daily Free Gift (Multi-strategy container + claim button clicks)
-        print("Locating Daily Free Gift item...")
-        gift_claimed = False
+        # Locate Daily Free Gift
+        logger.info("Locating Daily Free Gift item...")
         
-        # Strategies to click the daily free gift
-        # Strategy 1: Find button with "Claim" that's associated with "Daily" or "Free"
-        # Strategy 2: Find a card with "Daily Free Gift" or "Free Gift" or price "0.00" and click it or its button
-        # Strategy 3: Find any element containing "Free Gift" and search for button/claim text inside it
-        
-        # Let's check if there is an element with "Claim" or "Get" or "Free" or "0.00"
         gift_selectors = [
-            # Check for specific "Claim" buttons or texts
             lambda p: p.get_by_role("button", name="Claim"),
             lambda p: p.get_by_role("button", name="Get"),
             lambda p: p.locator("button:has-text('Claim')"),
@@ -320,7 +380,7 @@ def claim_profile(page, profile, visible=False):
                 locator = strategy(page)
                 if locator.first.is_visible(timeout=2000):
                     claim_element = locator.first
-                    print(f"Found claim element target using strategy {idx + 1}.")
+                    logger.info(f"Found claim element target using strategy {idx + 1}.")
                     break
             except Exception:
                 continue
@@ -328,15 +388,14 @@ def claim_profile(page, profile, visible=False):
         if not claim_element:
             raise Exception("Failed to locate Daily Free Gift claim element.")
             
-        print("Waiting to trigger claim click...")
+        logger.info("Waiting to trigger claim click...")
         human_delay(1.5, 3.0)
         
-        print("Clicking Daily Free Gift...")
+        logger.info("Clicking Daily Free Gift...")
         claim_element.click()
         
-        # Verify Success (Multi-strategy verification)
-        # Checking if success confirmation banner or dialog or text like "Claimed", "Successfully", "Received", "Success" is shown
-        print("Verifying claim success...")
+        # Verify Success
+        logger.info("Verifying claim success...")
         human_delay(2.0, 4.0)
         
         success_indicators = [
@@ -352,32 +411,31 @@ def claim_profile(page, profile, visible=False):
         success_detected = False
         for text in success_indicators:
             if page.locator(f"text={text}").first.is_visible(timeout=1000):
-                print(f"Success confirmation detected: '{text}'")
+                logger.info(f"Success confirmation detected: '{text}'")
                 success_detected = True
                 break
                 
         if not success_detected:
-            # If no overlay text, sometimes the button itself changes to "Claimed" or disabled.
-            # Let's check if the claim element now contains "Claimed"
             try:
                 btn_text = claim_element.text_content(timeout=1000) or ""
                 if "claimed" in btn_text.lower():
-                    print("Success confirmation detected: Button text updated to 'Claimed'.")
+                    logger.info("Success confirmation detected: Button text updated to 'Claimed'.")
                     success_detected = True
             except Exception:
                 pass
                 
         if success_detected:
-            print(f"Successfully claimed Daily Free Gift for {name} ({uid})!")
+            logger.info(f"Successfully claimed Daily Free Gift for {name} ({uid})!")
+            capture_claim_screenshot(page, uid, "success")
             return True
         else:
-            # Sometimes there is no confirmation modal, it might just succeed silently.
-            # If we reached here without raising an error, let's treat it as a success/warning but log it.
-            print(f"Warning: No explicit success confirmation popup detected for {name}. Assuming it may have already been claimed or claimed silently.")
+            logger.warning(f"Warning: No explicit success confirmation popup detected for {name}. Assuming it may have already been claimed or claimed silently.")
+            capture_claim_screenshot(page, uid, "success")
             return True
             
     except Exception as e:
-        print(f"Error claiming gift for profile '{name}': {e}")
+        logger.error(f"Error claiming gift for profile '{name}': {e}")
+        capture_claim_screenshot(page, uid, "fail")
         return False
 
 def main():
@@ -394,22 +452,26 @@ def main():
     )
     args = parser.parse_args()
     
-    # 1. Start internet connectivity check with backoff retry
+    # 1. Setup Logging and screen cleanup
+    setup_logging()
+    cleanup_old_screenshots()
+    
+    # 2. Start internet connectivity check with backoff retry
     if not wait_for_internet():
-        print("Internet connectivity check failed. Exiting.")
+        logger.error("Internet connectivity check failed. Exiting.")
         sys.exit(1)
         
     profiles = load_profiles(args.config)
     if not profiles:
-        print("No profiles loaded. Exiting.")
+        logger.info("No profiles loaded. Exiting.")
         sys.exit(0)
         
-    print(f"Loaded {len(profiles)} profiles from '{args.config}'.")
+    logger.info(f"Loaded {len(profiles)} profiles from '{args.config}'.")
     
     # Auto-ensure Playwright browser binaries
     ensure_playwright_installed()
     
-    # 2. Iterate profiles and claim those not yet claimed today
+    # 3. Iterate profiles and claim those not yet claimed today
     browser_started = False
     p_inst, browser, context, page = None, None, None, None
     success_count = 0
@@ -420,11 +482,11 @@ def main():
             uid = profile.get("uid")
             name = profile.get("name", "Unknown Player")
             if not uid:
-                print(f"Skipping profile '{name}' because UID is missing.")
+                logger.warning(f"Skipping profile '{name}' because UID is missing.")
                 continue
                 
             if is_already_claimed_today(uid):
-                print(f"Skipping {name} (UID: {uid}): Already claimed today.")
+                logger.info(f"Skipping {name} (UID: {uid}): Already claimed today.")
                 skipped_count += 1
                 continue
                 
@@ -443,12 +505,12 @@ def main():
             human_delay(3.0, 6.0)
     finally:
         if browser_started:
-            print("\nCleaning up and closing browser...")
+            logger.info("Cleaning up and closing browser...")
             context.close()
             browser.close()
             p_inst.stop()
             
-    print(f"\nExecution finished. Successfully claimed for {success_count}/{len(profiles) - skipped_count} attempted profiles. (Skipped {skipped_count} already claimed today)")
+    logger.info(f"Execution finished. Successfully claimed for {success_count}/{len(profiles) - skipped_count} attempted profiles. (Skipped {skipped_count} already claimed today)")
 
 if __name__ == "__main__":
     main()

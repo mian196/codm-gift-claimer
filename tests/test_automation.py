@@ -70,7 +70,8 @@ def test_init_browser():
         assert page == mock_page
 
 @patch("claimer.human_delay")
-def test_claim_profile_success(mock_delay):
+@patch("claimer.capture_claim_screenshot")
+def test_claim_profile_success(mock_screenshot, mock_delay):
     mock_page = MagicMock()
     mock_uid_locator = MagicMock()
     mock_login_locator = MagicMock()
@@ -115,9 +116,11 @@ def test_claim_profile_success(mock_delay):
     
     # Claim triggers
     mock_claim_locator.first.click.assert_called_once()
+    mock_screenshot.assert_called_once_with(mock_page, "1122334455", "success")
 
 @patch("claimer.human_delay")
-def test_claim_profile_login_failure(mock_delay):
+@patch("claimer.capture_claim_screenshot")
+def test_claim_profile_login_failure(mock_screenshot, mock_delay):
     mock_page = MagicMock()
     mock_uid_locator = MagicMock()
     mock_login_locator = MagicMock()
@@ -144,6 +147,7 @@ def test_claim_profile_login_failure(mock_delay):
     success = claimer.claim_profile(mock_page, profile)
     
     assert success is False
+    mock_screenshot.assert_called_once_with(mock_page, "1122334455", "fail")
 
 def test_load_claims_not_exist(tmp_path):
     state_file = tmp_path / "claims.json"
@@ -228,7 +232,9 @@ def test_wait_for_internet_timeout(mock_sleep, mock_check):
 
 @patch("claimer.wait_for_internet")
 @patch("claimer.sys.exit")
-def test_main_internet_failure(mock_exit, mock_wait_for_internet):
+@patch("claimer.setup_logging")
+@patch("claimer.cleanup_old_screenshots")
+def test_main_internet_failure(mock_cleanup, mock_setup_logging, mock_exit, mock_wait_for_internet):
     mock_wait_for_internet.return_value = False
     mock_exit.side_effect = SystemExit(1)
     
@@ -238,6 +244,8 @@ def test_main_internet_failure(mock_exit, mock_wait_for_internet):
             claimer.main()
     
     assert excinfo.value.code == 1
+    mock_setup_logging.assert_called_once()
+    mock_cleanup.assert_called_once()
     mock_wait_for_internet.assert_called_once()
     mock_exit.assert_called_once_with(1)
 
@@ -249,8 +257,10 @@ def test_main_internet_failure(mock_exit, mock_wait_for_internet):
 @patch("claimer.save_claim")
 @patch("claimer.ensure_playwright_installed")
 @patch("claimer.human_delay")
+@patch("claimer.setup_logging")
+@patch("claimer.cleanup_old_screenshots")
 def test_main_profile_skipping_and_claiming(
-    mock_delay, mock_ensure_installed, mock_save_claim, mock_claim_profile, 
+    mock_cleanup, mock_setup_logging, mock_delay, mock_ensure_installed, mock_save_claim, mock_claim_profile, 
     mock_init_browser, mock_is_already_claimed, mock_load_profiles, mock_wait_internet
 ):
     mock_wait_internet.return_value = True
@@ -271,6 +281,8 @@ def test_main_profile_skipping_and_claiming(
         mock_args.return_value = MagicMock(config="config/profiles.json", visible=False)
         claimer.main()
         
+    mock_setup_logging.assert_called_once()
+    mock_cleanup.assert_called_once()
     mock_wait_internet.assert_called_once()
     assert mock_is_already_claimed.call_count == 2
     mock_is_already_claimed.assert_any_call("111")
@@ -287,8 +299,10 @@ def test_main_profile_skipping_and_claiming(
 @patch("claimer.is_already_claimed_today")
 @patch("claimer.init_browser")
 @patch("claimer.ensure_playwright_installed")
+@patch("claimer.setup_logging")
+@patch("claimer.cleanup_old_screenshots")
 def test_main_all_profiles_skipped(
-    mock_ensure_installed, mock_init_browser, mock_is_already_claimed, mock_load_profiles, mock_wait_internet
+    mock_cleanup, mock_setup_logging, mock_ensure_installed, mock_init_browser, mock_is_already_claimed, mock_load_profiles, mock_wait_internet
 ):
     mock_wait_internet.return_value = True
     mock_load_profiles.return_value = [
@@ -300,5 +314,64 @@ def test_main_all_profiles_skipped(
         mock_args.return_value = MagicMock(config="config/profiles.json", visible=False)
         claimer.main()
         
+    mock_setup_logging.assert_called_once()
+    mock_cleanup.assert_called_once()
     mock_init_browser.assert_not_called()
+
+def test_setup_logging(tmp_path):
+    log_file = tmp_path / "claimer.log"
+    with patch("claimer.logger") as mock_logger:
+        mock_logger.handlers = []
+        claimer.setup_logging(log_path=str(log_file))
+        mock_logger.setLevel.assert_called_once_with(claimer.logging.INFO)
+        assert mock_logger.addHandler.call_count == 2
+
+def test_capture_claim_screenshot_success():
+    mock_page = MagicMock()
+    uid = "12345"
+    status = "success"
+    
+    with patch("claimer.os.makedirs") as mock_makedirs, \
+         patch("claimer.os.path.join") as mock_join, \
+         patch("claimer.logger") as mock_logger:
+        
+        mock_join.side_effect = lambda *args: "/".join(args)
+        claimer.capture_claim_screenshot(mock_page, uid, status)
+        
+        mock_makedirs.assert_called_once_with("logs/screenshots/success", exist_ok=True)
+        mock_page.screenshot.assert_called_once()
+        kwargs = mock_page.screenshot.call_args[1]
+        assert kwargs["full_page"] is True
+        assert "logs/screenshots/success/success_12345_" in kwargs["path"]
+
+def test_capture_claim_screenshot_exception():
+    mock_page = MagicMock()
+    mock_page.screenshot.side_effect = Exception("Screenshot failed")
+    
+    with patch("claimer.logger") as mock_logger:
+        claimer.capture_claim_screenshot(mock_page, "123", "fail")
+        mock_logger.error.assert_called_once()
+
+def test_cleanup_old_screenshots():
+    mock_files = [
+        ("logs/screenshots/success", [], ["success_1_2026-05-20.png", "success_2_2026-05-20.png"])
+    ]
+    with patch("claimer.os.path.exists") as mock_exists, \
+         patch("claimer.os.walk") as mock_walk, \
+         patch("claimer.os.path.getmtime") as mock_mtime, \
+         patch("claimer.os.remove") as mock_remove, \
+         patch("claimer.logger") as mock_logger:
+         
+        mock_exists.return_value = True
+        mock_walk.return_value = mock_files
+        
+        with patch("claimer.time.time") as mock_time:
+            mock_time.return_value = 2000000000
+            mock_mtime.side_effect = [1990000000, 1999000000]
+            
+            claimer.cleanup_old_screenshots(days_threshold=30)
+            
+            assert mock_remove.call_count == 1
+            called_path = mock_remove.call_args[0][0]
+            assert called_path.endswith("success_1_2026-05-20.png")
 
