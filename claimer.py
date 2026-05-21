@@ -500,12 +500,33 @@ def main():
         action="store_true", 
         help="Run browser headfully (visible window) for debugging."
     )
+    parser.add_argument(
+        "--delay", "-d",
+        type=int,
+        default=0,
+        help="Maximum random delay in minutes before execution to avoid detection."
+    )
     args = parser.parse_args()
     
     # 1. Setup Logging
     setup_logging()
     
-    # 2. Start internet connectivity check with backoff retry
+    # 2. Stealth Mode: Random delay before execution
+    max_delay = args.delay
+    if not isinstance(max_delay, (int, float)):
+        max_delay = 0
+        
+    if max_delay == 0 and os.environ.get("GITHUB_ACTIONS") == "true":
+        max_delay = 30  # Default to 30 minutes in GitHub Actions for high stealth
+        
+    if max_delay > 0:
+        total_seconds = random.randint(1, max_delay * 60)
+        delay_min = total_seconds // 60
+        delay_sec = total_seconds % 60
+        logger.info(f"Stealth Mode: Sleeping for a random delay of {delay_min}m {delay_sec}s before starting claim flow...")
+        time.sleep(total_seconds)
+        
+    # 3. Start internet connectivity check with backoff retry
     if not wait_for_internet():
         logger.error("Internet connectivity check failed. Exiting.")
         sys.exit(1)
