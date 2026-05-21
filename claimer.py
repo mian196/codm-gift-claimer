@@ -484,6 +484,31 @@ def claim_profile(page, profile, visible=False):
         if success_detected:
             logger.info(f"Successfully claimed Daily Free Gift for {name} ({uid})!")
             capture_claim_screenshot(page, uid, "success")
+            
+            # Safely dismiss the CP buy popup if visible to avoid accidental purchases
+            try:
+                close_selectors = [
+                    lambda p: p.get_by_role("button", name="Continue Browsing"),
+                    lambda p: p.locator("button:has-text('CONTINUE BROWSING')"),
+                    lambda p: p.locator("button:has-text('Continue')"),
+                    lambda p: p.locator("[class*='modal' i] button:has-text('Continue')"),
+                    lambda p: p.locator("[class*='modal' i] button:has-text('✕')"),
+                    lambda p: p.locator("[class*='modal' i] button:has-text('X')"),
+                    lambda p: p.locator(".modal-close, .close-btn, .close"),
+                ]
+                for idx, strategy in enumerate(close_selectors):
+                    try:
+                        locator = strategy(page)
+                        if locator.first.is_visible(timeout=1500):
+                            logger.info(f"Closing CP buy popup using selector strategy {idx + 1}...")
+                            locator.first.click()
+                            human_delay(1.5, 3.0)
+                            break
+                    except Exception:
+                        continue
+            except Exception as close_err:
+                logger.warning(f"Could not dismiss success popup: {close_err}")
+                
             return True
         else:
             logger.warning(f"Warning: No explicit success confirmation popup detected for {name}. Assuming it may have already been claimed or claimed silently.")

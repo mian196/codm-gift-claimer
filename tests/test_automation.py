@@ -124,6 +124,57 @@ def test_claim_profile_success(mock_screenshot, mock_delay):
 
 @patch("claimer.human_delay")
 @patch("claimer.capture_claim_screenshot")
+def test_claim_profile_success_with_cp_popup_close(mock_screenshot, mock_delay):
+    mock_page = MagicMock()
+    mock_uid_locator = MagicMock()
+    mock_login_locator = MagicMock()
+    mock_claim_locator = MagicMock()
+    mock_success_locator = MagicMock()
+    mock_close_locator = MagicMock()
+    
+    # Setup strategies visibility
+    mock_page.get_by_placeholder.side_effect = lambda placeholder: (
+        mock_uid_locator if placeholder == "Enter Player ID" else MagicMock()
+    )
+    
+    def get_by_role_side_effect(role, name):
+        if role == "button" and name == "Login":
+            return mock_login_locator
+        elif role == "button" and name == "Claim":
+            return mock_claim_locator
+        elif role == "button" and name == "Continue Browsing":
+            return mock_close_locator
+        return MagicMock()
+        
+    mock_page.get_by_role.side_effect = get_by_role_side_effect
+    
+    # Elements visibility mock
+    mock_uid_locator.is_visible.return_value = True
+    mock_login_locator.is_visible.return_value = True
+    mock_claim_locator.is_visible.return_value = True
+    mock_claim_locator.first = mock_claim_locator
+    
+    mock_close_locator.first = mock_close_locator
+    mock_close_locator.first.is_visible.return_value = True
+    
+    # We raise an Exception for complex selector chains in .locator so it falls back to the standard button claim strategy
+    def locator_side_effect(selector):
+        if "text=Claimed" in selector:
+            return mock_success_locator
+        raise Exception("Complex locator selector mock fallback")
+        
+    mock_page.locator.side_effect = locator_side_effect
+    mock_success_locator.first.is_visible.return_value = True
+    
+    profile = {"name": "Test Player", "uid": "1122334455"}
+    success = claimer.claim_profile(mock_page, profile)
+    
+    assert success is True
+    # Verify CP Close button was clicked
+    mock_close_locator.first.click.assert_called_once()
+
+@patch("claimer.human_delay")
+@patch("claimer.capture_claim_screenshot")
 def test_claim_profile_login_failure(mock_screenshot, mock_delay):
     mock_page = MagicMock()
     mock_uid_locator = MagicMock()
