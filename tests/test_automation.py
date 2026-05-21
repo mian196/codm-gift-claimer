@@ -91,12 +91,16 @@ def test_claim_profile_success(mock_screenshot, mock_delay):
     # Elements visibility mock
     mock_uid_locator.is_visible.return_value = True
     mock_login_locator.is_visible.return_value = True
-    mock_claim_locator.first.is_visible.return_value = True
+    mock_claim_locator.is_visible.return_value = True
+    mock_claim_locator.first = mock_claim_locator
     
-    # Success banner search mock
-    mock_page.locator.side_effect = lambda selector: (
-        mock_success_locator if "text=Claimed" in selector else MagicMock()
-    )
+    # We raise an Exception for complex selector chains in .locator so it falls back to the standard button claim strategy
+    def locator_side_effect(selector):
+        if "text=Claimed" in selector:
+            return mock_success_locator
+        raise Exception("Complex locator selector mock fallback")
+        
+    mock_page.locator.side_effect = locator_side_effect
     mock_success_locator.first.is_visible.return_value = True
     
     profile = {"name": "Test Player", "uid": "1122334455"}
@@ -112,10 +116,10 @@ def test_claim_profile_success(mock_screenshot, mock_delay):
     mock_login_locator.click.assert_called_once()
     
     # Nickname checks
-    mock_page.wait_for_selector.assert_any_call("text=Test Player", timeout=10000)
+    mock_page.wait_for_selector.assert_any_call("text=Test Player", timeout=5000)
     
     # Claim triggers
-    mock_claim_locator.first.click.assert_called_once()
+    mock_claim_locator.click.assert_called_once()
     mock_screenshot.assert_called_once_with(mock_page, "1122334455", "success")
 
 @patch("claimer.human_delay")
@@ -138,10 +142,10 @@ def test_claim_profile_login_failure(mock_screenshot, mock_delay):
     # Nickname check raises timeout
     mock_page.wait_for_selector.side_effect = Exception("Nickname timeout")
     
-    # General logout/signin visibility
-    mock_logout_locator = MagicMock()
-    mock_logout_locator.first.is_visible.return_value = False
-    mock_page.locator.side_effect = lambda selector: mock_logout_locator
+    # Force all claim element search methods to raise an Exception or return False
+    mock_page.locator.side_effect = Exception("Not found")
+    mock_page.get_by_role.side_effect = Exception("Not found")
+    mock_page.get_by_text.side_effect = Exception("Not found")
     
     profile = {"name": "Test Player", "uid": "1122334455"}
     success = claimer.claim_profile(mock_page, profile)

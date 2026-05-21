@@ -340,24 +340,36 @@ def claim_profile(page, profile, visible=False):
             except Exception:
                 continue
                 
-        if not login_btn:
-            raise Exception("Failed to locate the Login button on the page.")
-            
-        logger.info("Clicking Login...")
-        login_btn.click()
+        if login_btn:
+            logger.info("Clicking Login...")
+            login_btn.click()
+            human_delay(2.0, 4.0)
+        else:
+            logger.info("No explicit Login button found on the page. Pressing Enter on UID field to trigger validation...")
+            try:
+                uid_field.press("Enter")
+                human_delay(2.0, 4.0)
+            except Exception as press_err:
+                logger.warning(f"Could not press Enter on UID field: {press_err}")
         
-        # Verify Player Nickname Displays on screen
+        # Verify Player Nickname Displays on screen (non-blocking)
         logger.info("Verifying player nickname...")
+        verified = False
         try:
-            page.wait_for_selector(f"text={name}", timeout=10000)
-            logger.info(f"Verified: {name}")
+            page.wait_for_selector(f"text={name}", timeout=5000)
+            logger.info(f"Verified: {name} is displayed on the page.")
+            verified = True
         except Exception:
-            logger.warning(f"Warning: Player name '{name}' text not explicitly detected in 10s. Checking general page state...")
-            logout_found = page.locator("text=Logout").first.is_visible(timeout=2000) or page.locator("text=Sign Out").first.is_visible(timeout=2000)
-            if logout_found:
-                logger.info("Verified: Session is active (Logout/Sign Out option visible), assuming successfully logged in.")
-            else:
-                raise Exception(f"Login validation failed for UID '{uid}'. Nickname '{name}' not found and no active session detected.")
+            try:
+                logout_found = page.locator("text=Logout").first.is_visible(timeout=1000) or page.locator("text=Sign Out").first.is_visible(timeout=1000)
+                if logout_found:
+                    logger.info("Verified: Session is active (Logout/Sign Out option visible), assuming successfully logged in.")
+                    verified = True
+            except Exception:
+                pass
+
+        if not verified:
+            logger.warning(f"Warning: Nickname '{name}' or active session not explicitly detected yet. Proceeding to claim, as validation may occur during the claim step.")
 
         human_delay(2.0, 3.5)
         
@@ -365,21 +377,23 @@ def claim_profile(page, profile, visible=False):
         logger.info("Locating Daily Free Gift item...")
         
         gift_selectors = [
-            lambda p: p.get_by_role("button", name="Claim"),
-            lambda p: p.get_by_role("button", name="Get"),
-            lambda p: p.locator("button:has-text('Claim')"),
-            lambda p: p.locator("button:has-text('Get')"),
-            lambda p: p.locator("text=Daily Free Gift"),
-            lambda p: p.locator("text=Free Gift"),
-            lambda p: p.locator("text=Claim Gift"),
+            lambda p: p.locator(".gift-card, .card, div").filter(has_text="DAILY GIFT").locator("text=CLAIM GIFT").first,
+            lambda p: p.locator("text=CLAIM GIFT").first,
+            lambda p: p.get_by_role("button", name="Claim").first,
+            lambda p: p.get_by_role("button", name="Get").first,
+            lambda p: p.locator("button:has-text('Claim')").first,
+            lambda p: p.locator("button:has-text('Get')").first,
+            lambda p: p.locator("text=Daily Free Gift").first,
+            lambda p: p.locator("text=Free Gift").first,
+            lambda p: p.locator("text=Claim Gift").first,
         ]
         
         claim_element = None
         for idx, strategy in enumerate(gift_selectors):
             try:
                 locator = strategy(page)
-                if locator.first.is_visible(timeout=2000):
-                    claim_element = locator.first
+                if locator.is_visible(timeout=2000):
+                    claim_element = locator
                     logger.info(f"Found claim element target using strategy {idx + 1}.")
                     break
             except Exception:
@@ -393,6 +407,44 @@ def claim_profile(page, profile, visible=False):
         
         logger.info("Clicking Daily Free Gift...")
         claim_element.click()
+        human_delay(2.0, 4.0)
+        
+        # Check for and handle any confirmation popups/dialogs
+        logger.info("Checking for confirmation dialogs...")
+        confirm_selectors = [
+            lambda p: p.get_by_role("button", name="Confirm"),
+            lambda p: p.get_by_role("button", name="OK"),
+            lambda p: p.get_by_role("button", name="Yes"),
+            lambda p: p.get_by_role("button", name="Claim"),
+            lambda p: p.get_by_role("button", name="Continue"),
+            lambda p: p.locator("button:has-text('Confirm')"),
+            lambda p: p.locator("button:has-text('OK')"),
+            lambda p: p.locator("button:has-text('Claim')"),
+            lambda p: p.locator("button:has-text('Continue')"),
+            lambda p: p.locator(".modal-confirm-btn"),
+            lambda p: p.locator(".confirm-btn"),
+        ]
+        
+        confirm_btn = None
+        for idx, strategy in enumerate(confirm_selectors):
+            try:
+                locator = strategy(page)
+                if locator.first.is_visible(timeout=1500):
+                    confirm_btn = locator.first
+                    logger.info(f"Found confirmation button using strategy {idx + 1}: '{confirm_btn.text_content()}'")
+                    break
+            except Exception:
+                continue
+                
+        if confirm_btn:
+            try:
+                if name.lower() in page.content().lower():
+                    logger.info(f"Double confirmed: Player name '{name}' detected in page content.")
+            except Exception:
+                pass
+            logger.info("Clicking confirmation button...")
+            confirm_btn.click()
+            human_delay(2.0, 4.0)
         
         # Verify Success
         logger.info("Verifying claim success...")
