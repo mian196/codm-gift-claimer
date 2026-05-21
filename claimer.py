@@ -430,8 +430,13 @@ def claim_profile(page, profile, visible=False):
             try:
                 locator = strategy(page)
                 if locator.first.is_visible(timeout=1500):
-                    confirm_btn = locator.first
-                    logger.info(f"Found confirmation button using strategy {idx + 1}: '{confirm_btn.text_content()}'")
+                    candidate_btn = locator.first
+                    btn_text = candidate_btn.text_content() or ""
+                    # Ignore the main page's 'CLAIM GIFT' buttons to avoid clicking them again as false positive
+                    if "CLAIM GIFT" in btn_text.upper():
+                        continue
+                    confirm_btn = candidate_btn
+                    logger.info(f"Found confirmation button using strategy {idx + 1}: '{btn_text}'")
                     break
             except Exception:
                 continue
