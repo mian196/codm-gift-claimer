@@ -438,6 +438,49 @@ def claim_profile(page, profile, visible=False):
         capture_claim_screenshot(page, uid, "fail")
         return False
 
+def show_toast_notification(success_count: int, failed_count: int, skipped_count: int):
+    """
+    Triggers a native Windows Toast Notification displaying daily claim results
+    via a PowerShell subprocess. Safely returns immediately on non-Windows platforms.
+    """
+    if sys.platform != "win32":
+        return
+
+    title = "CODM Daily Gift Claimer"
+    
+    if success_count == 0 and failed_count == 0 and skipped_count > 0:
+        message = f"All {skipped_count} profile(s) already successfully claimed today!"
+        icon = "Information"
+    elif success_count > 0 and failed_count == 0:
+        message = f"Successfully claimed free rewards for all {success_count} profile(s) today!"
+        icon = "Information"
+    elif success_count > 0 and failed_count > 0:
+        message = f"Claiming complete. Success: {success_count}, Failed: {failed_count}."
+        icon = "Warning"
+    elif success_count == 0 and failed_count > 0:
+        message = f"Failed to claim daily rewards for any profile today (Failed: {failed_count})."
+        icon = "Error"
+    else:
+        message = "No profiles were processed today."
+        icon = "Information"
+        
+    powershell_code = f"""
+    [void] [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
+    $notification = New-Object System.Windows.Forms.NotifyIcon
+    $notification.Icon = [System.Drawing.SystemIcons]::Information
+    $notification.BalloonTipIcon = '{icon}'
+    $notification.BalloonTipTitle = '{title}'
+    $notification.BalloonTipText = '{message}'
+    $notification.Visible = $true
+    $notification.ShowBalloonTip(5000)
+    Start-Sleep -Seconds 1
+    $notification.Dispose()
+    """
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", powershell_code], capture_output=True)
+    except Exception:
+        pass
+
 def main():
     parser = argparse.ArgumentParser(description="Call of Duty: Mobile Store Daily Free Gift Claimer")
     parser.add_argument(
@@ -476,6 +519,7 @@ def main():
     p_inst, browser, context, page = None, None, None, None
     success_count = 0
     skipped_count = 0
+    failed_count = 0
     
     try:
         for profile in profiles:
@@ -501,6 +545,8 @@ def main():
             
             if success:
                 success_count += 1
+            else:
+                failed_count += 1
                 
             human_delay(3.0, 6.0)
     finally:
@@ -511,6 +557,9 @@ def main():
             p_inst.stop()
             
     logger.info(f"Execution finished. Successfully claimed for {success_count}/{len(profiles) - skipped_count} attempted profiles. (Skipped {skipped_count} already claimed today)")
+    
+    # Trigger native Windows Toast Notification
+    show_toast_notification(success_count, failed_count, skipped_count)
 
 if __name__ == "__main__":
     main()

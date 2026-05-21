@@ -375,3 +375,35 @@ def test_cleanup_old_screenshots():
             called_path = mock_remove.call_args[0][0]
             assert called_path.endswith("success_1_2026-05-20.png")
 
+def test_show_toast_notification_non_windows():
+    with patch("claimer.sys.platform", "linux"), \
+         patch("claimer.subprocess.run") as mock_run:
+        claimer.show_toast_notification(1, 0, 0)
+        mock_run.assert_not_called()
+
+def test_show_toast_notification_windows():
+    with patch("claimer.sys.platform", "win32"), \
+         patch("claimer.subprocess.run") as mock_run:
+        claimer.show_toast_notification(2, 1, 0)
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        assert "powershell" in args
+        assert "-NoProfile" in args
+        assert "-ExecutionPolicy" in args
+        assert "Bypass" in args
+        
+        # Check that powershell command matches Warning status
+        powershell_cmd = args[-1]
+        assert "BalloonTipIcon = 'Warning'" in powershell_cmd
+        assert "Success: 2, Failed: 1" in powershell_cmd
+
+def test_show_toast_notification_all_skipped():
+    with patch("claimer.sys.platform", "win32"), \
+         patch("claimer.subprocess.run") as mock_run:
+        claimer.show_toast_notification(0, 0, 3)
+        mock_run.assert_called_once()
+        powershell_cmd = mock_run.call_args[0][0][-1]
+        assert "BalloonTipIcon = 'Information'" in powershell_cmd
+        assert "already successfully claimed today" in powershell_cmd
+
+
