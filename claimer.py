@@ -85,6 +85,22 @@ def wait_for_internet(max_timeout=60):
     logger.error(f"Failed to establish internet connection to store.callofdutymobile.com within {max_timeout} seconds.")
     return False
 
+def mask_name(name):
+    """Masks a player name for logging security (e.g., 'PlayerNickname' -> 'Pl************')."""
+    if not name or name == "Unknown Player":
+        return name
+    if len(name) <= 2:
+        return name[0] + "*"
+    return name[:2] + "*" * (len(name) - 2)
+
+def mask_uid(uid):
+    """Masks a player UID for logging security (e.g., '123456789' -> '123***789')."""
+    if not uid:
+        return ""
+    if len(uid) <= 6:
+        return uid[:2] + "*" * (len(uid) - 2)
+    return uid[:3] + "*" * (len(uid) - 6) + uid[-3:]
+
 def load_profiles():
     """
     Loads user profiles strictly from the CODM_PROFILES environment variable (JSON array).
@@ -220,10 +236,10 @@ def claim_profile(page, profile, visible=False):
     name = profile.get("name", "Unknown Player")
     uid = profile.get("uid")
     if not uid:
-        logger.warning(f"Skipping profile '{name}' because UID is missing.")
+        logger.warning(f"Skipping profile '{mask_name(name)}' because UID is missing.")
         return False
         
-    logger.info(f"--- Processing Profile: {name} (UID: {uid}) ---")
+    logger.info(f"--- Processing Profile: {mask_name(name)} (UID: {mask_uid(uid)}) ---")
     
     try:
         # Navigate to Call of Duty: Mobile Store
@@ -306,7 +322,7 @@ def claim_profile(page, profile, visible=False):
         verified = False
         try:
             page.wait_for_selector(f"text={name}", timeout=5000)
-            logger.info(f"Verified: {name} is displayed on the page.")
+            logger.info(f"Verified: {mask_name(name)} is displayed on the page.")
             verified = True
         except Exception:
             try:
@@ -318,7 +334,7 @@ def claim_profile(page, profile, visible=False):
                 pass
 
         if not verified:
-            logger.warning(f"Warning: Nickname '{name}' or active session not explicitly detected yet. Proceeding to claim, as validation may occur during the claim step.")
+            logger.warning(f"Warning: Nickname '{mask_name(name)}' or active session not explicitly detected yet. Proceeding to claim, as validation may occur during the claim step.")
 
         human_delay(2.0, 3.5)
         
@@ -393,7 +409,7 @@ def claim_profile(page, profile, visible=False):
         if confirm_btn:
             try:
                 if name.lower() in page.content().lower():
-                    logger.info(f"Double confirmed: Player name '{name}' detected in page content.")
+                    logger.info(f"Double confirmed: Player name '{mask_name(name)}' detected in page content.")
             except Exception:
                 pass
             logger.info("Clicking confirmation button...")
@@ -433,7 +449,7 @@ def claim_profile(page, profile, visible=False):
         webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
         
         if success_detected:
-            logger.info(f"Successfully claimed Daily Free Gift for {name} ({uid})!")
+            logger.info(f"Successfully claimed Daily Free Gift for {mask_name(name)} ({mask_uid(uid)})!")
             if webhook_url:
                 send_discord_notification(webhook_url, name, uid, "success")
             
@@ -463,13 +479,13 @@ def claim_profile(page, profile, visible=False):
                 
             return True
         else:
-            logger.warning(f"Warning: No explicit success confirmation popup detected for {name}. Assuming it may have already been claimed or claimed silently.")
+            logger.warning(f"Warning: No explicit success confirmation popup detected for {mask_name(name)}. Assuming it may have already been claimed or claimed silently.")
             if webhook_url:
                 send_discord_notification(webhook_url, name, uid, "success")
             return True
             
     except Exception as e:
-        logger.error(f"Error claiming gift for profile '{name}': {e}")
+        logger.error(f"Error claiming gift for profile '{mask_name(name)}': {e}")
         webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
         if webhook_url:
             send_discord_notification(webhook_url, name, uid, "failed", error_msg=str(e))
@@ -515,7 +531,7 @@ def main():
             uid = profile.get("uid")
             name = profile.get("name", "Unknown Player")
             if not uid:
-                logger.warning(f"Skipping profile '{name}' because UID is missing.")
+                logger.warning(f"Skipping profile '{mask_name(name)}' because UID is missing.")
                 continue
                 
             # Initialize browser on demand
