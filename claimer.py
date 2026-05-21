@@ -87,9 +87,22 @@ def wait_for_internet(max_timeout=60):
 
 def load_profiles(config_path="config/profiles.json"):
     """
-    Loads user profiles from the configuration JSON file.
+    Loads user profiles from either the CODM_PROFILES environment variable (JSON array)
+    or falls back to the configuration JSON file.
     Each profile should contain 'name' and 'uid'.
     """
+    env_profiles = os.environ.get("CODM_PROFILES")
+    if env_profiles:
+        try:
+            profiles = json.loads(env_profiles)
+            if isinstance(profiles, list):
+                logger.info("Successfully loaded profiles from CODM_PROFILES environment variable.")
+                return profiles
+            else:
+                logger.warning("CODM_PROFILES environment variable is not a JSON array. Falling back to file.")
+        except Exception as e:
+            logger.warning(f"Failed to parse CODM_PROFILES environment variable: {e}. Falling back to file.")
+
     if not os.path.exists(config_path):
         logger.warning(f"Warning: Configuration file not found at '{config_path}'. Returning empty list.")
         return []
