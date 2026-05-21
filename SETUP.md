@@ -19,8 +19,8 @@ To prevent anyone else from seeing your Call of Duty: Mobile Player UIDs, you sh
    ```json
    [
      {
-       "name": "Muzammal",
-       "uid": "6922341873420271617"
+       "name": "YourNickname",
+       "uid": "1234567890123456789"
      }
    ]
    ```
