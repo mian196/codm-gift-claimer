@@ -54,4 +54,4 @@ python -m pytest
 
 ## ⚖️ License & Disclaimer
 
-This project is for educational and automation utility purposes. It is not affiliated with, authorized, or endorsed by Activision or Coda Payments. Use responsibly.
+This project is for educational and automation utility purposes. It is not affiliated with, authorized, or endorsed by Activision. Use responsibly.
