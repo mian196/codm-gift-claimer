@@ -274,6 +274,7 @@ def claim_profile(page, profile, visible=False):
             
         # Simulating human-like input typing with micro-delays
         logger.info("Typing Player UID...")
+        human_delay(1.0, 2.5) # Stealth delay before clicking UID field
         uid_field.click()
         uid_field.fill("") # Clear input first
         human_delay(0.5, 1.0)
@@ -306,6 +307,7 @@ def claim_profile(page, profile, visible=False):
                 continue
                 
         if login_btn:
+            human_delay(1.2, 2.8) # Stealth delay before clicking Login button
             logger.info("Clicking Login...")
             login_btn.click()
             human_delay(2.0, 4.0)
@@ -412,6 +414,7 @@ def claim_profile(page, profile, visible=False):
                     logger.info(f"Double confirmed: Player name '{mask_name(name)}' detected in page content.")
             except Exception:
                 pass
+            human_delay(1.0, 2.5) # Stealth delay before clicking Confirmation button
             logger.info("Clicking confirmation button...")
             confirm_btn.click()
             human_delay(2.0, 4.0)
@@ -468,6 +471,7 @@ def claim_profile(page, profile, visible=False):
                     try:
                         locator = strategy(page)
                         if locator.first.is_visible(timeout=1500):
+                            human_delay(1.0, 2.5) # Stealth delay before closing popup
                             logger.info(f"Closing CP buy popup using selector strategy {idx + 1}...")
                             locator.first.click()
                             human_delay(1.5, 3.0)
