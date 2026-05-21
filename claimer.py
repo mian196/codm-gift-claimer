@@ -5,7 +5,57 @@ import random
 import time
 import argparse
 import subprocess
+import urllib.request
+import urllib.error
+from datetime import datetime
 from playwright.sync_api import sync_playwright, Error
+
+def check_internet_connection(timeout=5):
+    """
+    Checks reachability of https://store.callofdutymobile.com/
+    by sending a request with a realistic User-Agent.
+    Returns True if connection succeeds and status is 200, False otherwise.
+    """
+    url = "https://store.callofdutymobile.com/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+def wait_for_internet(max_timeout=60):
+    """
+    Loops check_internet_connection() with exponential backoff.
+    Starts sleeping at 5s, doubles the interval on subsequent attempts, capped at remaining time or max_timeout.
+    Returns True if connection is established, False otherwise.
+    """
+    start_time = time.time()
+    sleep_interval = 5
+    
+    if check_internet_connection():
+        return True
+        
+    while True:
+        elapsed = time.time() - start_time
+        remaining = max_timeout - elapsed
+        if remaining <= 0:
+            break
+            
+        current_sleep = min(sleep_interval, remaining)
+        print(f"Internet offline. Retrying in {current_sleep:.1f} seconds...")
+        time.sleep(current_sleep)
+        
+        if check_internet_connection():
+            return True
+            
+        sleep_interval *= 2
+        
+    print(f"Failed to establish internet connection to store.callofdutymobile.com within {max_timeout} seconds.")
+    return False
 
 def load_profiles(config_path="config/profiles.json"):
     """
@@ -28,6 +78,62 @@ def load_profiles(config_path="config/profiles.json"):
     except Exception as e:
         print(f"Warning: Unexpected error reading '{config_path}': {e}. Returning empty list.")
         return []
+
+def load_claims(state_path="state/claims.json"):
+    """
+    Loads historical claim attempt records from the state JSON file.
+    Returns a JSON array of claim records.
+    """
+    if not os.path.exists(state_path):
+        return []
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            claims = json.load(f)
+            if not isinstance(claims, list):
+                print(f"Warning: State at '{state_path}' must be a JSON array. Returning empty list.")
+                return []
+            return claims
+    except json.JSONDecodeError as e:
+        print(f"Warning: Failed to parse malformed JSON at '{state_path}': {e}. Returning empty list.")
+        return []
+    except Exception as e:
+        print(f"Warning: Unexpected error reading '{state_path}': {e}. Returning empty list.")
+        return []
+
+def save_claim(uid, name, status, state_path="state/claims.json"):
+    """
+    Appends a claim execution record to state/claims.json.
+    """
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+    claims = load_claims(state_path)
+    claims.append({
+        "uid": uid,
+        "name": name,
+        "timestamp": datetime.now().isoformat(),
+        "status": status
+    })
+    try:
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(claims, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Warning: Failed to write state to '{state_path}': {e}")
+
+def is_already_claimed_today(uid, state_path="state/claims.json"):
+    """
+    Checks if a profile has already been claimed successfully on the current local calendar day.
+    """
+    claims = load_claims(state_path)
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    for claim in claims:
+        if claim.get("uid") == uid and claim.get("status") == "success":
+            # Check if timestamp date matches current local date
+            try:
+                claim_date = claim.get("timestamp", "").split("T")[0]
+                if claim_date == date_str:
+                    return True
+            except Exception:
+                continue
+    return False
 
 def ensure_playwright_installed():
     """
@@ -288,6 +394,11 @@ def main():
     )
     args = parser.parse_args()
     
+    # 1. Start internet connectivity check with backoff retry
+    if not wait_for_internet():
+        print("Internet connectivity check failed. Exiting.")
+        sys.exit(1)
+        
     profiles = load_profiles(args.config)
     if not profiles:
         print("No profiles loaded. Exiting.")
@@ -298,24 +409,46 @@ def main():
     # Auto-ensure Playwright browser binaries
     ensure_playwright_installed()
     
-    # Initialize the browser
-    p_inst, browser, context, page = init_browser(visible=args.visible)
-    
+    # 2. Iterate profiles and claim those not yet claimed today
+    browser_started = False
+    p_inst, browser, context, page = None, None, None, None
     success_count = 0
+    skipped_count = 0
+    
     try:
         for profile in profiles:
+            uid = profile.get("uid")
+            name = profile.get("name", "Unknown Player")
+            if not uid:
+                print(f"Skipping profile '{name}' because UID is missing.")
+                continue
+                
+            if is_already_claimed_today(uid):
+                print(f"Skipping {name} (UID: {uid}): Already claimed today.")
+                skipped_count += 1
+                continue
+                
+            # Initialize browser on demand
+            if not browser_started:
+                p_inst, browser, context, page = init_browser(visible=args.visible)
+                browser_started = True
+                
             success = claim_profile(page, profile, visible=args.visible)
+            status = "success" if success else "failed"
+            save_claim(uid, name, status)
+            
             if success:
                 success_count += 1
-            # Add a break/pause between different profiles to clean up or avoid speed limits
+                
             human_delay(3.0, 6.0)
     finally:
-        print("\nCleaning up and closing browser...")
-        context.close()
-        browser.close()
-        p_inst.stop()
-        
-    print(f"\nExecution finished. Successfully claimed for {success_count}/{len(profiles)} profiles.")
+        if browser_started:
+            print("\nCleaning up and closing browser...")
+            context.close()
+            browser.close()
+            p_inst.stop()
+            
+    print(f"\nExecution finished. Successfully claimed for {success_count}/{len(profiles) - skipped_count} attempted profiles. (Skipped {skipped_count} already claimed today)")
 
 if __name__ == "__main__":
     main()

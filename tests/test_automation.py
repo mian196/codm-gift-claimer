@@ -144,3 +144,161 @@ def test_claim_profile_login_failure(mock_delay):
     success = claimer.claim_profile(mock_page, profile)
     
     assert success is False
+
+def test_load_claims_not_exist(tmp_path):
+    state_file = tmp_path / "claims.json"
+    assert claimer.load_claims(state_path=str(state_file)) == []
+
+def test_load_claims_invalid(tmp_path):
+    state_file = tmp_path / "claims.json"
+    state_file.write_text("invalid json", encoding="utf-8")
+    assert claimer.load_claims(state_path=str(state_file)) == []
+
+def test_save_and_load_claims(tmp_path):
+    state_file = tmp_path / "claims.json"
+    claimer.save_claim("123", "Player1", "success", state_path=str(state_file))
+    claims = claimer.load_claims(state_path=str(state_file))
+    assert len(claims) == 1
+    assert claims[0]["uid"] == "123"
+    assert claims[0]["name"] == "Player1"
+    assert claims[0]["status"] == "success"
+    assert "timestamp" in claims[0]
+
+def test_is_already_claimed_today(tmp_path):
+    state_file = tmp_path / "claims.json"
+    # Empty
+    assert claimer.is_already_claimed_today("123", state_path=str(state_file)) is False
+    
+    # Save a failed claim for today
+    claimer.save_claim("123", "Player1", "failed", state_path=str(state_file))
+    assert claimer.is_already_claimed_today("123", state_path=str(state_file)) is False
+    
+    # Save a success claim for a past date
+    import json
+    from datetime import datetime, timedelta
+    past_date = (datetime.now() - timedelta(days=1)).isoformat()
+    claims = [{"uid": "123", "name": "Player1", "status": "success", "timestamp": past_date}]
+    with open(state_file, "w", encoding="utf-8") as f:
+        json.dump(claims, f)
+    assert claimer.is_already_claimed_today("123", state_path=str(state_file)) is False
+    
+    # Save a success claim for today
+    claimer.save_claim("123", "Player1", "success", state_path=str(state_file))
+    assert claimer.is_already_claimed_today("123", state_path=str(state_file)) is True
+
+@patch("claimer.urllib.request.urlopen")
+@patch("claimer.urllib.request.Request")
+def test_check_internet_connection_success(mock_request, mock_urlopen):
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_urlopen.return_value.__enter__.return_value = mock_response
+    
+    assert claimer.check_internet_connection() is True
+    mock_request.assert_called_once()
+    assert mock_request.call_args[0][0] == "https://store.callofdutymobile.com/"
+
+@patch("claimer.urllib.request.urlopen")
+def test_check_internet_connection_failure(mock_urlopen):
+    mock_urlopen.side_effect = Exception("Connection error")
+    assert claimer.check_internet_connection() is False
+
+@patch("claimer.check_internet_connection")
+@patch("claimer.time.sleep")
+@patch("claimer.time.time")
+def test_wait_for_internet_immediate_success(mock_time, mock_sleep, mock_check):
+    mock_check.return_value = True
+    assert claimer.wait_for_internet() is True
+    mock_sleep.assert_not_called()
+
+@patch("claimer.check_internet_connection")
+@patch("claimer.time.sleep")
+def test_wait_for_internet_retry_success(mock_sleep, mock_check):
+    mock_check.side_effect = [False, True]
+    assert claimer.wait_for_internet(max_timeout=60) is True
+    mock_sleep.assert_called_once_with(5)
+
+@patch("claimer.check_internet_connection")
+@patch("claimer.time.sleep")
+def test_wait_for_internet_timeout(mock_sleep, mock_check):
+    mock_check.return_value = False
+    with patch("claimer.time.time") as mock_time:
+        mock_time.side_effect = [0, 0, 3.1]
+        assert claimer.wait_for_internet(max_timeout=3) is False
+        mock_sleep.assert_called_once_with(3)
+
+@patch("claimer.wait_for_internet")
+@patch("claimer.sys.exit")
+def test_main_internet_failure(mock_exit, mock_wait_for_internet):
+    mock_wait_for_internet.return_value = False
+    mock_exit.side_effect = SystemExit(1)
+    
+    with patch("claimer.argparse.ArgumentParser.parse_args") as mock_args:
+        mock_args.return_value = MagicMock(config="config/profiles.json", visible=False)
+        with pytest.raises(SystemExit) as excinfo:
+            claimer.main()
+    
+    assert excinfo.value.code == 1
+    mock_wait_for_internet.assert_called_once()
+    mock_exit.assert_called_once_with(1)
+
+@patch("claimer.wait_for_internet")
+@patch("claimer.load_profiles")
+@patch("claimer.is_already_claimed_today")
+@patch("claimer.init_browser")
+@patch("claimer.claim_profile")
+@patch("claimer.save_claim")
+@patch("claimer.ensure_playwright_installed")
+@patch("claimer.human_delay")
+def test_main_profile_skipping_and_claiming(
+    mock_delay, mock_ensure_installed, mock_save_claim, mock_claim_profile, 
+    mock_init_browser, mock_is_already_claimed, mock_load_profiles, mock_wait_internet
+):
+    mock_wait_internet.return_value = True
+    mock_load_profiles.return_value = [
+        {"name": "Player1", "uid": "111"},
+        {"name": "Player2", "uid": "222"}
+    ]
+    mock_is_already_claimed.side_effect = lambda uid: uid == "111"
+    
+    mock_p = MagicMock()
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_page = MagicMock()
+    mock_init_browser.return_value = (mock_p, mock_browser, mock_context, mock_page)
+    mock_claim_profile.return_value = True
+    
+    with patch("claimer.argparse.ArgumentParser.parse_args") as mock_args:
+        mock_args.return_value = MagicMock(config="config/profiles.json", visible=False)
+        claimer.main()
+        
+    mock_wait_internet.assert_called_once()
+    assert mock_is_already_claimed.call_count == 2
+    mock_is_already_claimed.assert_any_call("111")
+    mock_is_already_claimed.assert_any_call("222")
+    mock_init_browser.assert_called_once_with(visible=False)
+    mock_claim_profile.assert_called_once_with(mock_page, {"name": "Player2", "uid": "222"}, visible=False)
+    mock_save_claim.assert_called_once_with("222", "Player2", "success")
+    mock_context.close.assert_called_once()
+    mock_browser.close.assert_called_once()
+    mock_p.stop.assert_called_once()
+
+@patch("claimer.wait_for_internet")
+@patch("claimer.load_profiles")
+@patch("claimer.is_already_claimed_today")
+@patch("claimer.init_browser")
+@patch("claimer.ensure_playwright_installed")
+def test_main_all_profiles_skipped(
+    mock_ensure_installed, mock_init_browser, mock_is_already_claimed, mock_load_profiles, mock_wait_internet
+):
+    mock_wait_internet.return_value = True
+    mock_load_profiles.return_value = [
+        {"name": "Player1", "uid": "111"}
+    ]
+    mock_is_already_claimed.return_value = True
+    
+    with patch("claimer.argparse.ArgumentParser.parse_args") as mock_args:
+        mock_args.return_value = MagicMock(config="config/profiles.json", visible=False)
+        claimer.main()
+        
+    mock_init_browser.assert_not_called()
+
