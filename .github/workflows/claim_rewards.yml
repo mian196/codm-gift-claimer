@@ -1,9 +1,12 @@
 name: CODM Daily Gift Claimer
 
+env:
+  TZ: Asia/Karachi
+
 on:
   schedule:
-    # Runs every day at 0:00 UTC (which is exactly 5:00 AM Asia/Karachi PKT time)
-    - cron: '0 0 * * *'
+    # Updated daily by schedule_randomizer.yml to run at a random time after 5:00 AM PKT
+    - cron: '54 14 * * *'
   workflow_dispatch:
     # Allows you to manually trigger the claim flow from the GitHub Actions tab
 
@@ -15,15 +18,29 @@ jobs:
     - name: Check out repository code
       uses: actions/checkout@v4
 
-    - name: Set Timezone
-      run: sudo timedatectl set-timezone Asia/Karachi
+    - name: Validate PKT run window
+      id: run_window
+      shell: bash
+      run: |
+        current_hour="$(date +%H)"
+        current_time="$(date +%H:%M)"
+
+        if [[ "${{ github.event_name }}" != "schedule" || ! "$current_hour" =~ ^0[0-4]$ ]]; then
+          echo "allowed=true" >> "$GITHUB_OUTPUT"
+          echo "Running at $current_time PKT."
+        else
+          echo "allowed=false" >> "$GITHUB_OUTPUT"
+          echo "Skipping scheduled run at $current_time PKT because it is before 05:00 PKT."
+        fi
 
     - name: Set up Python
+      if: steps.run_window.outputs.allowed == 'true'
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
     - name: Install dependencies
+      if: steps.run_window.outputs.allowed == 'true'
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
@@ -31,6 +48,7 @@ jobs:
         npx playwright install-deps chromium
 
     - name: Execute claimer script
+      if: steps.run_window.outputs.allowed == 'true'
       env:
         # Pass your secure profiles and discord webhook from GitHub Secrets as environment variables
         CODM_PROFILES: ${{ secrets.CODM_PROFILES }}
