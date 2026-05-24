@@ -16,7 +16,7 @@ jobs:
 
     steps:
     - name: Check out repository code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Validate PKT run window
       id: run_window
@@ -35,7 +35,7 @@ jobs:
 
     - name: Set up Python
       if: steps.run_window.outputs.allowed == 'true'
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.11'
 
