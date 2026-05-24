@@ -112,3 +112,16 @@ To verify that everything is working without waiting for the scheduled time:
 3. In the left sidebar, click **CODM Daily Gift Claimer**.
 4. Click the **Run workflow** dropdown button and click **Run workflow**.
 5. Once the job completes, check your Discord channel — you'll receive a rich embed showing the claim status.
+
+---
+
+## 🧪 Local Debug Run (Optional)
+
+If the website changes and you need to watch the browser, run the claimer locally in visible mode:
+
+```powershell
+$env:CODM_PROFILES='[{"name":"Test Player","uid":"YOUR_PLAYER_UID"}]'
+python claimer.py --visible --hold-open 120
+```
+
+`--visible` opens the Playwright browser window, and `--hold-open 120` keeps it open for 120 seconds after the claim attempt so you can inspect the final page state.

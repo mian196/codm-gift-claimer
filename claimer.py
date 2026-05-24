@@ -379,6 +379,11 @@ def claim_profile(page, profile, visible=False):
         # Check for and handle any confirmation popups/dialogs
         logger.info("Checking for confirmation dialogs...")
         confirm_selectors = [
+            lambda p: p.locator("[role='dialog'] button:has-text('CLAIM GIFT')"),
+            lambda p: p.locator("[class*='modal' i] button:has-text('CLAIM GIFT')"),
+            lambda p: p.locator("[class*='popup' i] button:has-text('CLAIM GIFT')"),
+            lambda p: p.locator("[class*='dialog' i] button:has-text('CLAIM GIFT')"),
+            lambda p: p.locator("div").filter(has_text="You are about to claim your Gift").locator("button:has-text('CLAIM GIFT')"),
             lambda p: p.get_by_role("button", name="Confirm"),
             lambda p: p.get_by_role("button", name="OK"),
             lambda p: p.get_by_role("button", name="Yes"),
@@ -399,9 +404,6 @@ def claim_profile(page, profile, visible=False):
                 if locator.first.is_visible(timeout=1500):
                     candidate_btn = locator.first
                     btn_text = candidate_btn.text_content() or ""
-                    # Ignore the main page's 'CLAIM GIFT' buttons to avoid clicking them again as false positive
-                    if "CLAIM GIFT" in btn_text.upper():
-                        continue
                     confirm_btn = candidate_btn
                     logger.info(f"Found confirmation button using strategy {idx + 1}: '{btn_text}'")
                     break
@@ -504,7 +506,14 @@ def main():
         action="store_true", 
         help="Run browser headfully (visible window) for debugging."
     )
+    parser.add_argument(
+        "--hold-open",
+        type=int,
+        default=0,
+        help="Keep the browser open for this many seconds before cleanup."
+    )
     args = parser.parse_args()
+    hold_open = int(getattr(args, "hold_open", 0) or 0)
     
     # 1. Setup Logging
     setup_logging()
@@ -553,6 +562,9 @@ def main():
             human_delay(3.0, 6.0)
     finally:
         if browser_started:
+            if hold_open > 0:
+                logger.info(f"Holding browser open for {hold_open} seconds...")
+                time.sleep(hold_open)
             logger.info("Cleaning up and closing browser...")
             context.close()
             browser.close()
