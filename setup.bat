@@ -105,7 +105,9 @@ echo.
 
 :: 5. Register Startup trigger (Try Task Scheduler first, fallback to Windows Startup Folder)
 echo [INFO] Registering startup trigger...
-schtasks /create /tn "CODM_Gift_Claimer" /tr "\"%~dp0start.bat\"" /sc onlogon /f >nul 2>&1
+set "CURRENT_DIR=%~dp0"
+set "CURRENT_DIR=%CURRENT_DIR:~0,-1%"
+powershell -Command "$action = New-ScheduledTaskAction -Execute '%CURRENT_DIR%\start.bat' -WorkingDirectory '%CURRENT_DIR%'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -Compatibility Win8; $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings; $task.Settings.Hidden = $true; Register-ScheduledTask -TaskName 'CODM_Gift_Claimer' -InputObject $task -Force" >nul 2>&1
 if %errorlevel% EQU 0 goto TASK_SUCCESS
 
 echo [INFO] Task Scheduler registration failed (requires Administrator privileges).
