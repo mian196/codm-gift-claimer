@@ -149,7 +149,9 @@ def send_discord_notification(webhook_url, player_name, uid, status, error_msg=N
     }
     
     if error_msg:
-        embed["fields"].append({"name": "Error Details", "value": f"```{error_msg}```", "inline": False})
+        # Truncate error to fit Discord's embed field value limit (1024 chars)
+        truncated = error_msg[:900] + "..." if len(error_msg) > 900 else error_msg
+        embed["fields"].append({"name": "Error Details", "value": f"```{truncated}```", "inline": False})
         
     payload = {
         "embeds": [embed]
@@ -246,6 +248,51 @@ def claim_profile(page, profile, visible=False):
         logger.info("Navigating to Call of Duty: Mobile Store...")
         page.goto("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=30000)
         human_delay(2.0, 4.0)
+        
+        # Dismiss any overlay modals (privacy/age verification dialog)
+        logger.info("Checking for overlay modals to dismiss...")
+        overlay_selectors = [
+            lambda p: p.locator("span:has-text('Yes, I am.')"),
+            lambda p: p.locator("button:has-text('Yes, I am')"),
+            lambda p: p.locator("[data-testid='dialogModal'] button").first,
+            lambda p: p.locator("#headlessui-portal-root button").first,
+            lambda p: p.locator("div.overlay-container button").first,
+            lambda p: p.get_by_role("button", name="Yes"),
+            lambda p: p.locator("button:has-text('Accept')"),
+            lambda p: p.locator("button:has-text('I agree')"),
+            lambda p: p.locator("button:has-text('Continue')"),
+        ]
+        
+        overlay_dismissed = False
+        for idx, strategy in enumerate(overlay_selectors):
+            try:
+                locator = strategy(page)
+                if locator.is_visible(timeout=3000):
+                    human_delay(0.5, 1.5)
+                    logger.info(f"Found overlay modal button using strategy {idx + 1}. Clicking to dismiss...")
+                    locator.click(timeout=5000)
+                    human_delay(1.5, 3.0)
+                    overlay_dismissed = True
+                    logger.info("Overlay modal dismissed successfully.")
+                    break
+            except Exception:
+                continue
+        
+        if not overlay_dismissed:
+            logger.info("No overlay modal detected, proceeding...")
+        
+        # Check if a second overlay appears (some sites chain modals)
+        try:
+            second_overlay = page.locator("#headlessui-portal-root").first
+            if second_overlay.is_visible(timeout=2000):
+                second_btn = second_overlay.locator("button").first
+                if second_btn.is_visible(timeout=1000):
+                    logger.info("Found a second overlay modal. Dismissing...")
+                    human_delay(0.5, 1.0)
+                    second_btn.click(timeout=5000)
+                    human_delay(1.5, 2.5)
+        except Exception:
+            pass
         
         # Locate UID Input Field (Multi-strategy)
         logger.info("Locating Player ID input field...")
