@@ -103,25 +103,38 @@ def mask_uid(uid):
 
 def load_profiles():
     """
-    Loads user profiles strictly from the CODM_PROFILES environment variable (JSON array).
+    Loads user profiles from the CODM_PROFILES environment variable (JSON array).
+    Falls back to config/profiles.json if the environment variable is not set.
     Each profile should contain 'name' and 'uid'.
     """
     env_profiles = os.environ.get("CODM_PROFILES")
-    if not env_profiles:
-        logger.error("CODM_PROFILES environment variable is missing or empty. Please set it as a GitHub Secret.")
-        return []
-        
-    try:
-        profiles = json.loads(env_profiles)
-        if isinstance(profiles, list):
-            logger.info("Successfully loaded profiles from CODM_PROFILES environment variable.")
-            return profiles
-        else:
-            logger.error("CODM_PROFILES environment variable is not a JSON array. Please verify your secret.")
-            return []
-    except Exception as e:
-        logger.error(f"Failed to parse CODM_PROFILES environment variable JSON: {e}")
-        return []
+    if env_profiles:
+        try:
+            profiles = json.loads(env_profiles)
+            if isinstance(profiles, list):
+                logger.info("Successfully loaded profiles from CODM_PROFILES environment variable.")
+                return profiles
+            else:
+                logger.error("CODM_PROFILES environment variable is not a JSON array. Please verify your secret.")
+        except Exception as e:
+            logger.error(f"Failed to parse CODM_PROFILES environment variable JSON: {e}")
+            
+    # Fallback to local config/profiles.json
+    local_path = os.path.join("config", "profiles.json")
+    if os.path.exists(local_path):
+        try:
+            with open(local_path, "r", encoding="utf-8") as f:
+                profiles = json.load(f)
+                if isinstance(profiles, list):
+                    logger.info("Successfully loaded profiles from local config/profiles.json.")
+                    return profiles
+                else:
+                    logger.error("local config/profiles.json is not a JSON array.")
+        except Exception as e:
+            logger.error(f"Failed to parse local config/profiles.json: {e}")
+            
+    logger.error("No profiles found (neither CODM_PROFILES env var nor config/profiles.json is available).")
+    return []
 
 def send_discord_notification(webhook_url, player_name, uid, status, error_msg=None):
     """
@@ -194,18 +207,30 @@ def ensure_playwright_installed():
 
 def init_browser(visible=False):
     """
-    Initializes a new Playwright Chromium instance with custom stealth configurations.
+    Initializes a new Playwright Chromium instance with custom stealth configurations and proxy support.
     Returns (playwright_instance, browser, context, page)
     """
     p = sync_playwright().start()
     try:
+        proxy_server = os.environ.get("PROXY_SERVER")
+        proxy = None
+        if proxy_server:
+            proxy = {"server": proxy_server}
+            proxy_user = os.environ.get("PROXY_USERNAME")
+            proxy_pass = os.environ.get("PROXY_PASSWORD")
+            if proxy_user and proxy_pass:
+                proxy["username"] = proxy_user
+                proxy["password"] = proxy_pass
+            logger.info(f"Using proxy server: {proxy_server}")
+
         browser = p.chromium.launch(
             headless=not visible,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-infobars",
-            ]
+            ],
+            proxy=proxy
         )
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
@@ -213,7 +238,8 @@ def init_browser(visible=False):
             user_agent=user_agent,
             viewport={"width": 1280, "height": 720},
             device_scale_factor=1,
-            bypass_csp=True
+            bypass_csp=True,
+            proxy=proxy
         )
         
         page = context.new_page()
@@ -247,6 +273,16 @@ def claim_profile(page, profile, visible=False):
         # Navigate to Call of Duty: Mobile Store
         logger.info("Navigating to Call of Duty: Mobile Store...")
         page.goto("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=30000)
+        
+        # Wait for the page to finish loading (either UID input or the age/privacy modal appears)
+        logger.info("Waiting for page elements to load...")
+        combined_load_selector = "input#userId, input[name='userId'], input[placeholder*='ID' i], span:has-text('Yes, I am.'), button:has-text('Yes, I am')"
+        try:
+            page.wait_for_selector(combined_load_selector, state="visible", timeout=20000)
+            logger.info("Page elements loaded successfully.")
+        except Exception as e:
+            logger.warning(f"Timeout or error waiting for page elements to load: {e}")
+            
         human_delay(2.0, 4.0)
         
         # Dismiss any overlay modals (privacy/age verification dialog)
@@ -267,10 +303,10 @@ def claim_profile(page, profile, visible=False):
         for idx, strategy in enumerate(overlay_selectors):
             try:
                 locator = strategy(page)
-                if locator.is_visible(timeout=3000):
+                if locator.first.is_visible():
                     human_delay(0.5, 1.5)
                     logger.info(f"Found overlay modal button using strategy {idx + 1}. Clicking to dismiss...")
-                    locator.click(timeout=5000)
+                    locator.first.click(timeout=5000)
                     human_delay(1.5, 3.0)
                     overlay_dismissed = True
                     logger.info("Overlay modal dismissed successfully.")
@@ -284,9 +320,9 @@ def claim_profile(page, profile, visible=False):
         # Check if a second overlay appears (some sites chain modals)
         try:
             second_overlay = page.locator("#headlessui-portal-root").first
-            if second_overlay.is_visible(timeout=2000):
+            if second_overlay.first.is_visible():
                 second_btn = second_overlay.locator("button").first
-                if second_btn.is_visible(timeout=1000):
+                if second_btn.first.is_visible():
                     logger.info("Found a second overlay modal. Dismissing...")
                     human_delay(0.5, 1.0)
                     second_btn.click(timeout=5000)
@@ -298,9 +334,12 @@ def claim_profile(page, profile, visible=False):
         logger.info("Locating Player ID input field...")
         uid_field = None
         uid_selectors = [
+            lambda p: p.locator("input#userId"),
+            lambda p: p.locator("input[name='userId']"),
+            lambda p: p.locator("input[placeholder*='Player ID' i]"),
+            lambda p: p.locator("input[placeholder*='ID' i]"),
             lambda p: p.get_by_placeholder("Enter Player ID"),
             lambda p: p.get_by_placeholder("UID"),
-            lambda p: p.locator("input[placeholder*='ID' i]"),
             lambda p: p.locator("input[placeholder*='UID' i]"),
             lambda p: p.locator("input[type='text']").first,
             lambda p: p.locator("input#userid"),
@@ -309,8 +348,8 @@ def claim_profile(page, profile, visible=False):
         for idx, strategy in enumerate(uid_selectors):
             try:
                 locator = strategy(page)
-                if locator.is_visible(timeout=2000):
-                    uid_field = locator
+                if locator.first.is_visible():
+                    uid_field = locator.first
                     logger.info(f"Found UID field using strategy {idx + 1}.")
                     break
             except Exception:
@@ -346,8 +385,8 @@ def claim_profile(page, profile, visible=False):
         for idx, strategy in enumerate(login_selectors):
             try:
                 locator = strategy(page)
-                if locator.is_visible(timeout=2000):
-                    login_btn = locator
+                if locator.first.is_visible():
+                    login_btn = locator.first
                     logger.info(f"Found Login button using strategy {idx + 1}.")
                     break
             except Exception:
@@ -375,7 +414,7 @@ def claim_profile(page, profile, visible=False):
             verified = True
         except Exception:
             try:
-                logout_found = page.locator("text=Logout").first.is_visible(timeout=1000) or page.locator("text=Sign Out").first.is_visible(timeout=1000)
+                logout_found = page.locator("text=Logout").first.is_visible() or page.locator("text=Sign Out").first.is_visible()
                 if logout_found:
                     logger.info("Verified: Session is active (Logout/Sign Out option visible), assuming successfully logged in.")
                     verified = True
@@ -406,14 +445,26 @@ def claim_profile(page, profile, visible=False):
         for idx, strategy in enumerate(gift_selectors):
             try:
                 locator = strategy(page)
-                if locator.is_visible(timeout=2000):
-                    claim_element = locator
+                if locator.first.is_visible():
+                    claim_element = locator.first
                     logger.info(f"Found claim element target using strategy {idx + 1}.")
                     break
             except Exception:
                 continue
                 
         if not claim_element:
+            # Let's check if it is already claimed
+            already_claimed_indicators = ["Claimed", "claimed", "CLAIMED"]
+            for indicator in already_claimed_indicators:
+                try:
+                    if page.locator(f"text={indicator}").first.is_visible():
+                        logger.info(f"Daily Free Gift has ALREADY been claimed for today (found text: '{indicator}').")
+                        webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+                        if webhook_url:
+                            send_discord_notification(webhook_url, name, uid, "success", error_msg="Already claimed today.")
+                        return True
+                except Exception:
+                    pass
             raise Exception("Failed to locate Daily Free Gift claim element.")
             
         logger.info("Waiting to trigger claim click...")
@@ -448,7 +499,7 @@ def claim_profile(page, profile, visible=False):
         for idx, strategy in enumerate(confirm_selectors):
             try:
                 locator = strategy(page)
-                if locator.first.is_visible(timeout=1500):
+                if locator.first.is_visible():
                     candidate_btn = locator.first
                     btn_text = candidate_btn.text_content() or ""
                     confirm_btn = candidate_btn
@@ -484,14 +535,17 @@ def claim_profile(page, profile, visible=False):
         
         success_detected = False
         for text in success_indicators:
-            if page.locator(f"text={text}").first.is_visible(timeout=1000):
-                logger.info(f"Success confirmation detected: '{text}'")
-                success_detected = True
-                break
+            try:
+                if page.locator(f"text={text}").first.is_visible():
+                    logger.info(f"Success confirmation detected: '{text}'")
+                    success_detected = True
+                    break
+            except Exception:
+                continue
                 
         if not success_detected:
             try:
-                btn_text = claim_element.text_content(timeout=1000) or ""
+                btn_text = claim_element.text_content() or ""
                 if "claimed" in btn_text.lower():
                     logger.info("Success confirmation detected: Button text updated to 'Claimed'.")
                     success_detected = True
@@ -519,7 +573,7 @@ def claim_profile(page, profile, visible=False):
                 for idx, strategy in enumerate(close_selectors):
                     try:
                         locator = strategy(page)
-                        if locator.first.is_visible(timeout=1500):
+                        if locator.first.is_visible():
                             human_delay(1.0, 2.5) # Stealth delay before closing popup
                             logger.info(f"Closing CP buy popup using selector strategy {idx + 1}...")
                             locator.first.click()
@@ -539,6 +593,12 @@ def claim_profile(page, profile, visible=False):
             
     except Exception as e:
         logger.error(f"Error claiming gift for profile '{mask_name(name)}': {e}")
+        try:
+            os.makedirs("logs", exist_ok=True)
+            page.screenshot(path="logs/error_screenshot.png")
+            logger.info("Saved error screenshot to logs/error_screenshot.png")
+        except Exception as screenshot_err:
+            logger.warning(f"Could not take error screenshot: {screenshot_err}")
         webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
         if webhook_url:
             send_discord_notification(webhook_url, name, uid, "failed", error_msg=str(e))
