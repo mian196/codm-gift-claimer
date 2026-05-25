@@ -101,25 +101,33 @@ def mask_uid(uid):
         return uid[:2] + "*" * (len(uid) - 2)
     return uid[:3] + "*" * (len(uid) - 6) + uid[-3:]
 
+SETTINGS = {}
+
+def load_settings():
+    """
+    Loads configuration settings from config/settings.json.
+    """
+    global SETTINGS
+    local_path = os.path.join("config", "settings.json")
+    if os.path.exists(local_path):
+        try:
+            with open(local_path, "r", encoding="utf-8") as f:
+                SETTINGS = json.load(f)
+                logger.info("Successfully loaded settings from local config/settings.json.")
+                return
+        except Exception as e:
+            logger.error(f"Failed to parse config/settings.json: {e}")
+            
+    # Fallback/Empty settings
+    SETTINGS = {}
+
 def load_profiles():
     """
-    Loads user profiles from the CODM_PROFILES environment variable (JSON array).
-    Falls back to config/profiles.json if the environment variable is not set.
+    Loads user profiles from config/profiles.json.
+    Falls back to the CODM_PROFILES environment variable (JSON array).
     Each profile should contain 'name' and 'uid'.
     """
-    env_profiles = os.environ.get("CODM_PROFILES")
-    if env_profiles:
-        try:
-            profiles = json.loads(env_profiles)
-            if isinstance(profiles, list):
-                logger.info("Successfully loaded profiles from CODM_PROFILES environment variable.")
-                return profiles
-            else:
-                logger.error("CODM_PROFILES environment variable is not a JSON array. Please verify your secret.")
-        except Exception as e:
-            logger.error(f"Failed to parse CODM_PROFILES environment variable JSON: {e}")
-            
-    # Fallback to local config/profiles.json
+    # 1. Primary: Load from local config/profiles.json
     local_path = os.path.join("config", "profiles.json")
     if os.path.exists(local_path):
         try:
@@ -132,8 +140,21 @@ def load_profiles():
                     logger.error("local config/profiles.json is not a JSON array.")
         except Exception as e:
             logger.error(f"Failed to parse local config/profiles.json: {e}")
-            
-    logger.error("No profiles found (neither CODM_PROFILES env var nor config/profiles.json is available).")
+
+    # 2. Secondary/Fallback: Load from CODM_PROFILES environment variable
+    env_profiles = os.environ.get("CODM_PROFILES")
+    if env_profiles:
+        try:
+            profiles = json.loads(env_profiles)
+            if isinstance(profiles, list):
+                logger.info("Successfully loaded profiles from CODM_PROFILES environment variable.")
+                return profiles
+            else:
+                logger.error("CODM_PROFILES environment variable is not a JSON array.")
+        except Exception as e:
+            logger.error(f"Failed to parse CODM_PROFILES environment variable JSON: {e}")
+
+    logger.error("No profiles found (neither config/profiles.json nor CODM_PROFILES env var is available).")
     return []
 
 def send_discord_notification(webhook_url, player_name, uid, status, error_msg=None):
@@ -157,7 +178,7 @@ def send_discord_notification(webhook_url, player_name, uid, status, error_msg=N
         ],
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "footer": {
-            "text": "CODM Daily Gift Claimer | Automated with GitHub Actions"
+            "text": "CODM Daily Gift Claimer | Automated with Windows Task Scheduler"
         }
     }
     
@@ -207,30 +228,18 @@ def ensure_playwright_installed():
 
 def init_browser(visible=False):
     """
-    Initializes a new Playwright Chromium instance with custom stealth configurations and proxy support.
+    Initializes a new Playwright Chromium instance with custom stealth configurations.
     Returns (playwright_instance, browser, context, page)
     """
     p = sync_playwright().start()
     try:
-        proxy_server = os.environ.get("PROXY_SERVER")
-        proxy = None
-        if proxy_server:
-            proxy = {"server": proxy_server}
-            proxy_user = os.environ.get("PROXY_USERNAME")
-            proxy_pass = os.environ.get("PROXY_PASSWORD")
-            if proxy_user and proxy_pass:
-                proxy["username"] = proxy_user
-                proxy["password"] = proxy_pass
-            logger.info(f"Using proxy server: {proxy_server}")
-
         browser = p.chromium.launch(
             headless=not visible,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-infobars",
-            ],
-            proxy=proxy
+            ]
         )
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         
@@ -238,8 +247,7 @@ def init_browser(visible=False):
             user_agent=user_agent,
             viewport={"width": 1280, "height": 720},
             device_scale_factor=1,
-            bypass_csp=True,
-            proxy=proxy
+            bypass_csp=True
         )
         
         page = context.new_page()
@@ -476,6 +484,45 @@ def claim_profile(page, profile, visible=False):
         
         # Check for and handle any confirmation popups/dialogs
         logger.info("Checking for confirmation dialogs...")
+        
+        # Wait for either the confirmation button or the ineligibility block to appear in the dialog
+        logger.info("Waiting for confirmation dialog contents to load...")
+        combined_dialog_selector = "[role='dialog'] button:has-text('CLAIM GIFT'), [class*='modal' i] button:has-text('CLAIM GIFT'), *:has-text('Sorry, you are not eligible'), *:has-text('not eligible to claim')"
+        try:
+            page.wait_for_selector(combined_dialog_selector, state="visible", timeout=12000)
+            logger.info("Confirmation dialog contents loaded successfully.")
+        except Exception as e:
+            logger.warning(f"Timeout or error waiting for confirmation dialog contents: {e}")
+            
+        # Check if the dialog displays an ineligibility message (already claimed today)
+        ineligible_selectors = [
+            "Sorry, you are not eligible",
+            "not eligible to claim",
+            "limit reached",
+            "already claimed"
+        ]
+        
+        ineligible_detected = False
+        for text in ineligible_selectors:
+            try:
+                if page.locator(f"text={text}").first.is_visible():
+                    logger.info(f"Detected eligibility block in dialog: '{text}' (Gift has already been claimed today).")
+                    ineligible_detected = True
+                    break
+            except Exception:
+                continue
+                
+        if ineligible_detected:
+            # Click "GO BACK" or close modal to clean up if possible
+            try:
+                page.locator("button:has-text('GO BACK')").first.click(timeout=3000)
+                human_delay(1.5, 2.5)
+            except Exception:
+                pass
+            webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
+            if webhook_url:
+                send_discord_notification(webhook_url, name, uid, "success", error_msg="Already claimed today.")
+            return True
         confirm_selectors = [
             lambda p: p.locator("[role='dialog'] button:has-text('CLAIM GIFT')"),
             lambda p: p.locator("[class*='modal' i] button:has-text('CLAIM GIFT')"),
@@ -552,7 +599,7 @@ def claim_profile(page, profile, visible=False):
             except Exception:
                 pass
                 
-        webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+        webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
         
         if success_detected:
             logger.info(f"Successfully claimed Daily Free Gift for {mask_name(name)} ({mask_uid(uid)})!")
@@ -599,7 +646,7 @@ def claim_profile(page, profile, visible=False):
             logger.info("Saved error screenshot to logs/error_screenshot.png")
         except Exception as screenshot_err:
             logger.warning(f"Could not take error screenshot: {screenshot_err}")
-        webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+        webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
         if webhook_url:
             send_discord_notification(webhook_url, name, uid, "failed", error_msg=str(e))
         return False
@@ -625,7 +672,23 @@ def main():
     # 1. Setup Logging
     setup_logging()
     
-    # 2. Start internet connectivity check with backoff retry
+    # 2. Load settings from local config/settings.json
+    load_settings()
+    
+    # 3. Sub-millisecond state check: Exit instantly if already successfully claimed today
+    state_path = os.path.join("config", "state.json")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if os.path.exists(state_path):
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                state_data = json.load(f)
+                if state_data.get("last_successful_claim") == today_str:
+                    logger.info(f"Daily Free Gift already successfully claimed today ({today_str}). Exiting immediately to save resources.")
+                    sys.exit(0)
+        except Exception as state_err:
+            logger.warning(f"Could not read state file: {state_err}")
+            
+    # 4. Start internet connectivity check with backoff retry
     if not wait_for_internet():
         logger.error("Internet connectivity check failed. Exiting.")
         sys.exit(1)
@@ -640,7 +703,7 @@ def main():
     # Auto-ensure Playwright browser binaries
     ensure_playwright_installed()
     
-    # 3. Iterate profiles and claim
+    # 5. Iterate profiles and claim
     browser_started = False
     p_inst, browser, context, page = None, None, None, None
     success_count = 0
@@ -678,6 +741,16 @@ def main():
             p_inst.stop()
             
     logger.info(f"Execution finished. Successfully claimed for {success_count}/{len(profiles)} attempted profiles.")
+    
+    # 6. Record successful execution to state file if all attempted profiles succeeded
+    if failed_count == 0 and success_count > 0:
+        try:
+            os.makedirs("config", exist_ok=True)
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({"last_successful_claim": today_str}, f, indent=2)
+            logger.info(f"All active claims completed successfully today ({today_str}). State updated.")
+        except Exception as state_err:
+            logger.warning(f"Could not write state file: {state_err}")
 
 if __name__ == "__main__":
     main()
