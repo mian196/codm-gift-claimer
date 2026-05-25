@@ -86,7 +86,7 @@ if not exist config\profiles.json (
 if not exist config\settings.json (
     (
         echo {
-        echo   "DISCORD_WEBHOOK_URL": ""
+        echo   "DISCORD_WEBHOOK_URL": "YOUR_DISCORD_WEBHOOK_URL_HERE"
         echo }
     ) > config\settings.json
     echo [SUCCESS] Created template settings in config/settings.json.
