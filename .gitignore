@@ -1,5 +1,7 @@
 # project related files
 config/profiles.json
+config/settings.json
+config/state.json
 logs/*
 state/*
 .planning/
