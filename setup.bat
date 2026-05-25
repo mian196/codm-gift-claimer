@@ -1,6 +1,14 @@
 @echo off
 :: CODM Daily Gift Claimer Local Setup Utility
 cd /d "%~dp0"
+
+:: Self-elevate the script to run as Administrator (needed for Task Scheduler registration)
+fsutil dirty query %systemdrive% >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [INFO] Requesting Administrator privileges...
+    powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    exit /b
+)
 echo ===================================================
 echo   CODM Daily Free Gift Claimer - Local Setup
 echo ===================================================
