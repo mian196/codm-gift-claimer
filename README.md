@@ -11,7 +11,7 @@ An elegant, automated, and highly secure Python script designed to automatically
 
 ## 🌟 Key Features
 
-* **⚡ Zero-Touch Cloud Automation:** Automatically runs daily on GitHub Actions at 5:00 AM UTC (or your preferred local time).
+* **⚡ Zero-Touch Cloud Automation:** Automatically runs daily on GitHub Actions at a random time after 5:00 AM PKT.
 * **🛡️ Secure GitHub Actions Integration:** Keep your Player UIDs completely hidden from the public eye. Uses encrypted GitHub Repository Secrets to load profiles dynamically.
 * **💬 Discord Status Webhook Alerts:** Get instant, gorgeous rich embed alerts directly in your Discord channel showing successful claims or details of failures.
 * **🚀 Optional Login Flow:** Gracefully handles store interfaces without requiring distinct login buttons by using fallback standard keyboard actions (e.g., automated `Enter` submit validation).
