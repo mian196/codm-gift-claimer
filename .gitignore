@@ -1,10 +1,12 @@
 # project related files
+# configs
 config/profiles.json
 config/settings.json
 config/state.json
 logs/*
 state/*
 .planning/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
