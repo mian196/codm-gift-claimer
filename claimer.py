@@ -432,211 +432,252 @@ def claim_profile(page, profile, visible=False):
         if not verified:
             logger.warning(f"Warning: Nickname '{mask_name(name)}' or active session not explicitly detected yet. Proceeding to claim, as validation may occur during the claim step.")
 
-        human_delay(2.0, 3.5)
+        # Loop to locate and claim ALL available unclaimed gifts
+        gift_index = 0
+        claimed_gifts_count = 0
         
-        # Locate Daily Free Gift
-        logger.info("Locating Daily Free Gift item...")
-        
-        gift_selectors = [
-            lambda p: p.locator(".gift-card, .card, div").filter(has_text="DAILY GIFT").locator("text=CLAIM GIFT").first,
-            lambda p: p.locator("text=CLAIM GIFT").first,
-            lambda p: p.get_by_role("button", name="Claim").first,
-            lambda p: p.get_by_role("button", name="Get").first,
-            lambda p: p.locator("button:has-text('Claim')").first,
-            lambda p: p.locator("button:has-text('Get')").first,
-            lambda p: p.locator("text=Daily Free Gift").first,
-            lambda p: p.locator("text=Free Gift").first,
-            lambda p: p.locator("text=Claim Gift").first,
-        ]
-        
-        claim_element = None
-        for idx, strategy in enumerate(gift_selectors):
+        while True:
+            human_delay(1.5, 3.0)
+            
+            # Ensure any open modals/dialogs from previous attempts are closed
             try:
-                locator = strategy(page)
-                if locator.first.is_visible():
-                    claim_element = locator.first
-                    logger.info(f"Found claim element target using strategy {idx + 1}.")
-                    break
+                close_btn = page.locator("[class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X'), [role='dialog'] button:has-text('✕'), button:has-text('GO BACK')").first
+                if close_btn.is_visible():
+                    logger.info("Found an open dialog. Closing it to ensure clean state...")
+                    close_btn.click(timeout=3000)
+                    human_delay(1.5, 2.5)
             except Exception:
+                pass
+                
+            # Locate all free gift containers dynamically to prevent stale element references
+            gift_cards = page.locator(".sku-card--freebie").all()
+            
+            if not gift_cards:
+                raise Exception("Failed to locate any Daily Free Gift card elements (.sku-card--freebie) on the page.")
+                
+            logger.info(f"Detected {len(gift_cards)} free gifts in the store.")
+            
+            if gift_index >= len(gift_cards):
+                if claimed_gifts_count > 0:
+                    logger.info(f"Finished claiming all available gifts for this profile. Total claimed: {claimed_gifts_count}")
+                    return True
+                else:
+                    # Check if all gifts were already claimed (no claims performed, but cards were present)
+                    all_claimed = True
+                    for idx, card in enumerate(gift_cards):
+                        card_text = card.inner_text() or ""
+                        if not ("Claimed" in card_text or "CLAIMED" in card_text):
+                            all_claimed = False
+                            break
+                            
+                    if all_claimed:
+                        logger.info("All available free gifts have already been claimed today.")
+                        webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
+                        if webhook_url:
+                            send_discord_notification(webhook_url, name, uid, "success", error_msg="All available free gifts have already been claimed today.")
+                        return True
+                    else:
+                        raise Exception("Failed to process the unclaimed free gifts correctly.")
+
+            card = gift_cards[gift_index]
+            card_text = card.inner_text() or ""
+            
+            # Extract card title for descriptive logging
+            card_title = f"Gift #{gift_index + 1}"
+            try:
+                title_loc = card.locator(".sku-info-section__titles__title").first
+                if title_loc.is_visible():
+                    card_title = title_loc.text_content().strip()
+            except Exception:
+                pass
+                
+            logger.info(f"Processing gift card '{card_title}' (Index: {gift_index + 1} of {len(gift_cards)})...")
+            
+            # Check if this specific card is already claimed
+            if "Claimed" in card_text or "CLAIMED" in card_text:
+                logger.info(f"'{card_title}' is already claimed today. Skipping...")
+                gift_index += 1
                 continue
                 
-        if not claim_element:
-            # Let's check if it is already claimed
-            already_claimed_indicators = ["Claimed", "claimed", "CLAIMED"]
-            for indicator in already_claimed_indicators:
+            # Locate the "CLAIM GIFT" button within this card container
+            claim_element = card.locator("text=CLAIM GIFT").first
+            if not claim_element.is_visible():
+                logger.warning(f"Could not find visible 'CLAIM GIFT' button in '{card_title}'. Skipping...")
+                gift_index += 1
+                continue
+                
+            logger.info(f"'{card_title}' is unclaimed! Claiming it now...")
+            logger.info("Waiting to trigger claim click...")
+            human_delay(1.5, 3.0)
+            
+            logger.info(f"Clicking claim button for '{card_title}'...")
+            claim_element.click()
+            human_delay(2.0, 4.0)
+            
+            # Check for and handle any confirmation popups/dialogs
+            logger.info("Checking for confirmation dialogs...")
+            
+            # Wait for either the confirmation button or the ineligibility block to appear in the dialog
+            logger.info("Waiting for confirmation dialog contents to load...")
+            combined_dialog_selector = "[role='dialog'] button:has-text('CLAIM GIFT'), [class*='modal' i] button:has-text('CLAIM GIFT'), *:has-text('Sorry, you are not eligible'), *:has-text('not eligible to claim')"
+            try:
+                page.wait_for_selector(combined_dialog_selector, state="visible", timeout=12000)
+                logger.info("Confirmation dialog contents loaded successfully.")
+            except Exception as e:
+                logger.warning(f"Timeout or error waiting for confirmation dialog contents: {e}")
+                
+            # Check if the dialog displays an ineligibility message (already claimed today or locked)
+            ineligible_selectors = [
+                "Sorry, you are not eligible",
+                "not eligible to claim",
+                "limit reached",
+                "already claimed"
+            ]
+            
+            ineligible_detected = False
+            for text in ineligible_selectors:
                 try:
-                    if page.locator(f"text={indicator}").first.is_visible():
-                        logger.info(f"Daily Free Gift has ALREADY been claimed for today (found text: '{indicator}').")
-                        webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
-                        if webhook_url:
-                            send_discord_notification(webhook_url, name, uid, "success", error_msg="Already claimed today.")
-                        return True
+                    if page.locator(f"text={text}").first.is_visible():
+                        logger.info(f"Detected eligibility block in dialog: '{text}' (This gift has already been claimed today or is locked).")
+                        ineligible_detected = True
+                        break
+                except Exception:
+                    continue
+                    
+            if ineligible_detected:
+                # Click "GO BACK" or close modal to clean up if possible
+                try:
+                    page.locator("button:has-text('GO BACK')").first.click(timeout=3000)
+                    human_delay(1.5, 2.5)
                 except Exception:
                     pass
-            raise Exception("Failed to locate Daily Free Gift claim element.")
-            
-        logger.info("Waiting to trigger claim click...")
-        human_delay(1.5, 3.0)
-        
-        logger.info("Clicking Daily Free Gift...")
-        claim_element.click()
-        human_delay(2.0, 4.0)
-        
-        # Check for and handle any confirmation popups/dialogs
-        logger.info("Checking for confirmation dialogs...")
-        
-        # Wait for either the confirmation button or the ineligibility block to appear in the dialog
-        logger.info("Waiting for confirmation dialog contents to load...")
-        combined_dialog_selector = "[role='dialog'] button:has-text('CLAIM GIFT'), [class*='modal' i] button:has-text('CLAIM GIFT'), *:has-text('Sorry, you are not eligible'), *:has-text('not eligible to claim')"
-        try:
-            page.wait_for_selector(combined_dialog_selector, state="visible", timeout=12000)
-            logger.info("Confirmation dialog contents loaded successfully.")
-        except Exception as e:
-            logger.warning(f"Timeout or error waiting for confirmation dialog contents: {e}")
-            
-        # Check if the dialog displays an ineligibility message (already claimed today)
-        ineligible_selectors = [
-            "Sorry, you are not eligible",
-            "not eligible to claim",
-            "limit reached",
-            "already claimed"
-        ]
-        
-        ineligible_detected = False
-        for text in ineligible_selectors:
-            try:
-                if page.locator(f"text={text}").first.is_visible():
-                    logger.info(f"Detected eligibility block in dialog: '{text}' (Gift has already been claimed today).")
-                    ineligible_detected = True
-                    break
-            except Exception:
+                try:
+                    page.locator("[class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X'), [role='dialog'] button:has-text('✕')").first.click(timeout=2000)
+                except Exception:
+                    pass
+                logger.info("Skipping this locked/claimed gift.")
+                gift_index += 1  # Move to the next card in the list
                 continue
-                
-        if ineligible_detected:
-            # Click "GO BACK" or close modal to clean up if possible
-            try:
-                page.locator("button:has-text('GO BACK')").first.click(timeout=3000)
-                human_delay(1.5, 2.5)
-            except Exception:
-                pass
-            webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
-            if webhook_url:
-                send_discord_notification(webhook_url, name, uid, "success", error_msg="Already claimed today.")
-            return True
-        confirm_selectors = [
-            lambda p: p.locator("[role='dialog'] button:has-text('CLAIM GIFT')"),
-            lambda p: p.locator("[class*='modal' i] button:has-text('CLAIM GIFT')"),
-            lambda p: p.locator("[class*='popup' i] button:has-text('CLAIM GIFT')"),
-            lambda p: p.locator("[class*='dialog' i] button:has-text('CLAIM GIFT')"),
-            lambda p: p.locator("div").filter(has_text="You are about to claim your Gift").locator("button:has-text('CLAIM GIFT')"),
-            lambda p: p.get_by_role("button", name="Confirm"),
-            lambda p: p.get_by_role("button", name="OK"),
-            lambda p: p.get_by_role("button", name="Yes"),
-            lambda p: p.get_by_role("button", name="Claim"),
-            lambda p: p.get_by_role("button", name="Continue"),
-            lambda p: p.locator("button:has-text('Confirm')"),
-            lambda p: p.locator("button:has-text('OK')"),
-            lambda p: p.locator("button:has-text('Claim')"),
-            lambda p: p.locator("button:has-text('Continue')"),
-            lambda p: p.locator(".modal-confirm-btn"),
-            lambda p: p.locator(".confirm-btn"),
-        ]
-        
-        confirm_btn = None
-        for idx, strategy in enumerate(confirm_selectors):
-            try:
-                locator = strategy(page)
-                if locator.first.is_visible():
-                    candidate_btn = locator.first
-                    btn_text = candidate_btn.text_content() or ""
-                    confirm_btn = candidate_btn
-                    logger.info(f"Found confirmation button using strategy {idx + 1}: '{btn_text}'")
-                    break
-            except Exception:
-                continue
-                
-        if confirm_btn:
-            try:
-                if name.lower() in page.content().lower():
-                    logger.info(f"Double confirmed: Player name '{mask_name(name)}' detected in page content.")
-            except Exception:
-                pass
-            human_delay(1.0, 2.5) # Stealth delay before clicking Confirmation button
-            logger.info("Clicking confirmation button...")
-            confirm_btn.click()
+
+            confirm_selectors = [
+                lambda p: p.locator("[role='dialog'] button:has-text('CLAIM GIFT')"),
+                lambda p: p.locator("[class*='modal' i] button:has-text('CLAIM GIFT')"),
+                lambda p: p.locator("[class*='popup' i] button:has-text('CLAIM GIFT')"),
+                lambda p: p.locator("[class*='dialog' i] button:has-text('CLAIM GIFT')"),
+                lambda p: p.locator("div").filter(has_text="You are about to claim your Gift").locator("button:has-text('CLAIM GIFT')"),
+                lambda p: p.get_by_role("button", name="Confirm"),
+                lambda p: p.get_by_role("button", name="OK"),
+                lambda p: p.get_by_role("button", name="Yes"),
+                lambda p: p.get_by_role("button", name="Claim"),
+                lambda p: p.get_by_role("button", name="Continue"),
+                lambda p: p.locator("button:has-text('Confirm')"),
+                lambda p: p.locator("button:has-text('OK')"),
+                lambda p: p.locator("button:has-text('Claim')"),
+                lambda p: p.locator("button:has-text('Continue')"),
+                lambda p: p.locator(".modal-confirm-btn"),
+                lambda p: p.locator(".confirm-btn"),
+            ]
+            
+            confirm_btn = None
+            for idx, strategy in enumerate(confirm_selectors):
+                try:
+                    locator = strategy(page)
+                    if locator.first.is_visible():
+                        candidate_btn = locator.first
+                        btn_text = candidate_btn.text_content() or ""
+                        confirm_btn = candidate_btn
+                        logger.info(f"Found confirmation button using strategy {idx + 1}: '{btn_text}'")
+                        break
+                except Exception:
+                    continue
+                    
+            if confirm_btn:
+                try:
+                    if name.lower() in page.content().lower():
+                        logger.info(f"Double confirmed: Player name '{mask_name(name)}' detected in page content.")
+                except Exception:
+                    pass
+                human_delay(1.0, 2.5) # Stealth delay before clicking Confirmation button
+                logger.info("Clicking confirmation button...")
+                confirm_btn.click()
+                human_delay(2.0, 4.0)
+            
+            # Verify Success
+            logger.info("Verifying claim success...")
             human_delay(2.0, 4.0)
-        
-        # Verify Success
-        logger.info("Verifying claim success...")
-        human_delay(2.0, 4.0)
-        
-        success_indicators = [
-            "Claimed",
-            "Successfully claimed",
-            "Received",
-            "Success",
-            "Success!",
-            "claimed",
-            "received"
-        ]
-        
-        success_detected = False
-        for text in success_indicators:
-            try:
-                if page.locator(f"text={text}").first.is_visible():
-                    logger.info(f"Success confirmation detected: '{text}'")
-                    success_detected = True
-                    break
-            except Exception:
-                continue
-                
-        if not success_detected:
-            try:
-                btn_text = claim_element.text_content() or ""
-                if "claimed" in btn_text.lower():
-                    logger.info("Success confirmation detected: Button text updated to 'Claimed'.")
-                    success_detected = True
-            except Exception:
-                pass
-                
-        webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
-        
-        if success_detected:
-            logger.info(f"Successfully claimed Daily Free Gift for {mask_name(name)} ({mask_uid(uid)})!")
-            if webhook_url:
-                send_discord_notification(webhook_url, name, uid, "success")
             
-            # Safely dismiss the CP buy popup if visible to avoid accidental purchases
-            try:
-                close_selectors = [
-                    lambda p: p.get_by_role("button", name="Continue Browsing"),
-                    lambda p: p.locator("button:has-text('CONTINUE BROWSING')"),
-                    lambda p: p.locator("button:has-text('Continue')"),
-                    lambda p: p.locator("[class*='modal' i] button:has-text('Continue')"),
-                    lambda p: p.locator("[class*='modal' i] button:has-text('✕')"),
-                    lambda p: p.locator("[class*='modal' i] button:has-text('X')"),
-                    lambda p: p.locator(".modal-close, .close-btn, .close"),
-                ]
-                for idx, strategy in enumerate(close_selectors):
-                    try:
-                        locator = strategy(page)
-                        if locator.first.is_visible():
-                            human_delay(1.0, 2.5) # Stealth delay before closing popup
-                            logger.info(f"Closing CP buy popup using selector strategy {idx + 1}...")
-                            locator.first.click()
-                            human_delay(1.5, 3.0)
-                            break
-                    except Exception:
-                        continue
-            except Exception as close_err:
-                logger.warning(f"Could not dismiss success popup: {close_err}")
+            success_indicators = [
+                "Claimed",
+                "Successfully claimed",
+                "Received",
+                "Success",
+                "Success!",
+                "claimed",
+                "received"
+            ]
+            
+            success_detected = False
+            for text in success_indicators:
+                try:
+                    if page.locator(f"text={text}").first.is_visible():
+                        logger.info(f"Success confirmation detected: '{text}'")
+                        success_detected = True
+                        break
+                except Exception:
+                    continue
+                    
+            if not success_detected:
+                try:
+                    btn_text = claim_element.text_content() or ""
+                    if "claimed" in btn_text.lower():
+                        logger.info("Success confirmation detected: Button text updated to 'Claimed'.")
+                        success_detected = True
+                except Exception:
+                    pass
+                    
+            webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
+            
+            if success_detected:
+                logger.info(f"Successfully claimed '{card_title}' for {mask_name(name)} ({mask_uid(uid)})!")
+                claimed_gifts_count += 1
+                if webhook_url:
+                    send_discord_notification(webhook_url, name, uid, "success", error_msg=f"Successfully claimed free gift '{card_title}'!")
                 
-            return True
-        else:
-            logger.warning(f"Warning: No explicit success confirmation popup detected for {mask_name(name)}. Assuming it may have already been claimed or claimed silently.")
-            if webhook_url:
-                send_discord_notification(webhook_url, name, uid, "success")
-            return True
+                # Safely dismiss the CP buy popup if visible to avoid accidental purchases
+                try:
+                    close_selectors = [
+                        lambda p: p.get_by_role("button", name="Continue Browsing"),
+                        lambda p: p.locator("button:has-text('CONTINUE BROWSING')"),
+                        lambda p: p.locator("button:has-text('Continue')"),
+                        lambda p: p.locator("[class*='modal' i] button:has-text('Continue')"),
+                        lambda p: p.locator("[class*='modal' i] button:has-text('✕')"),
+                        lambda p: p.locator("[class*='modal' i] button:has-text('X')"),
+                        lambda p: p.locator(".modal-close, .close-btn, .close"),
+                    ]
+                    for idx, strategy in enumerate(close_selectors):
+                        try:
+                            locator = strategy(page)
+                            if locator.first.is_visible():
+                                human_delay(1.0, 2.5) # Stealth delay before closing popup
+                                logger.info(f"Closing CP buy popup using selector strategy {idx + 1}...")
+                                locator.first.click()
+                                human_delay(1.5, 3.0)
+                                break
+                        except Exception:
+                            continue
+                except Exception as close_err:
+                    logger.warning(f"Could not dismiss success popup: {close_err}")
+                
+                # Move to next gift
+                gift_index += 1
+            else:
+                logger.warning(f"Warning: No explicit success confirmation popup detected for {mask_name(name)} on '{card_title}'. Assuming it may have been claimed silently.")
+                claimed_gifts_count += 1
+                if webhook_url:
+                    send_discord_notification(webhook_url, name, uid, "success", error_msg=f"Claimed free gift '{card_title}' (silent success assumed).")
+                
+                # Move to next gift
+                gift_index += 1
             
     except Exception as e:
         logger.error(f"Error claiming gift for profile '{mask_name(name)}': {e}")
