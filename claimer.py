@@ -762,6 +762,17 @@ def main():
             if not browser_started:
                 p_inst, browser, context, page = init_browser(visible=args.visible)
                 browser_started = True
+            else:
+                # Create a fresh, isolated context and page for subsequent profiles
+                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                context = browser.new_context(
+                    user_agent=user_agent,
+                    viewport={"width": 1280, "height": 720},
+                    device_scale_factor=1,
+                    bypass_csp=True
+                )
+                page = context.new_page()
+                page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
                 
             success = claim_profile(page, profile, visible=args.visible)
             
@@ -769,6 +780,16 @@ def main():
                 success_count += 1
             else:
                 failed_count += 1
+                
+            # Close the page and context to ensure clean session state for the next profile
+            try:
+                page.close()
+            except Exception:
+                pass
+            try:
+                context.close()
+            except Exception:
+                pass
                 
             human_delay(3.0, 6.0)
     finally:

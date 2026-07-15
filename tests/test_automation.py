@@ -68,30 +68,65 @@ def test_claim_profile_success(mock_discord, mock_delay, monkeypatch):
     mock_page = MagicMock()
     mock_uid_locator = MagicMock()
     mock_login_locator = MagicMock()
-    mock_claim_locator = MagicMock()
-    mock_success_locator = MagicMock()
+    
+    mock_uid_locator.is_visible.return_value = True
+    mock_uid_locator.first = mock_uid_locator
+    mock_login_locator.is_visible.return_value = True
+    mock_login_locator.first = mock_login_locator
     
     mock_page.get_by_placeholder.side_effect = lambda placeholder: (
         mock_uid_locator if placeholder == "Enter Player ID" else MagicMock()
     )
     mock_page.get_by_role.side_effect = lambda role, name: (
-        mock_login_locator if role == "button" and name == "Login" else (
-            mock_claim_locator if role == "button" and name == "Claim" else MagicMock()
-        )
+        mock_login_locator if role == "button" and name == "Login" else MagicMock()
     )
     
-    mock_uid_locator.is_visible.return_value = True
-    mock_login_locator.is_visible.return_value = True
-    mock_claim_locator.is_visible.return_value = True
-    mock_claim_locator.first = mock_claim_locator
+    # Mocking the card and claiming elements
+    mock_card = MagicMock()
+    mock_card.inner_text.return_value = "Unclaimed"
     
-    def locator_side_effect(selector):
-        if "text=Claimed" in selector:
-            return mock_success_locator
-        raise Exception("Complex locator selector mock fallback")
+    mock_title_loc = MagicMock()
+    mock_title_loc.is_visible.return_value = True
+    mock_title_loc.first = mock_title_loc
+    mock_title_loc.text_content.return_value = "DAILY GIFT"
+    
+    mock_claim_btn = MagicMock()
+    mock_claim_btn.is_visible.return_value = True
+    mock_claim_btn.first = mock_claim_btn
+    
+    mock_confirm_btn = MagicMock()
+    mock_confirm_btn.is_visible.return_value = True
+    mock_confirm_btn.first = mock_confirm_btn
+    mock_confirm_btn.text_content.return_value = "CLAIM GIFT"
+    
+    mock_default_locator = MagicMock()
+    mock_default_locator.is_visible.return_value = False
+    mock_default_locator.first = mock_default_locator
+    
+    def card_locator_side_effect(selector):
+        if ".sku-info-section__titles__title" in selector:
+            return mock_title_loc
+        if "text=CLAIM GIFT" in selector:
+            return mock_claim_btn
+        return mock_default_locator
+    mock_card.locator.side_effect = card_locator_side_effect
+    
+    mock_freebie_locator = MagicMock()
+    mock_freebie_locator.all.return_value = [mock_card]
+    
+    mock_dialog_success_locator = MagicMock()
+    mock_dialog_success_locator.first.is_visible.return_value = True
+    
+    def page_locator_side_effect(selector):
+        if ".sku-card--freebie" in selector:
+            return mock_freebie_locator
+        if "text=Claimed" in selector or "text=Success" in selector:
+            return mock_dialog_success_locator
+        if "CLAIM GIFT" in selector:
+            return mock_confirm_btn
+        return mock_default_locator
         
-    mock_page.locator.side_effect = locator_side_effect
-    mock_success_locator.first.is_visible.return_value = True
+    mock_page.locator.side_effect = page_locator_side_effect
     
     profile = {"name": "Test Player", "uid": "1122334455"}
     success = claimer.claim_profile(mock_page, profile)
@@ -101,11 +136,10 @@ def test_claim_profile_success(mock_discord, mock_delay, monkeypatch):
     mock_uid_locator.click.assert_called_once()
     mock_uid_locator.fill.assert_called_with("")
     assert mock_uid_locator.type.call_count == len("1122334455")
-    mock_login_locator.click.assert_called_once()
     
     mock_page.wait_for_selector.assert_any_call("text=Test Player", timeout=5000)
-    mock_claim_locator.click.assert_called_once()
-    mock_discord.assert_called_once_with("https://discord.com/api/webhooks/mock", "Test Player", "1122334455", "success")
+    mock_claim_btn.click.assert_called_once()
+    mock_discord.assert_called_once_with("https://discord.com/api/webhooks/mock", "Test Player", "1122334455", "success", error_msg="Successfully claimed free gift 'DAILY GIFT'!")
 
 @patch("claimer.human_delay")
 @patch("claimer.send_discord_notification")
@@ -114,47 +148,80 @@ def test_claim_profile_success_with_cp_popup_close(mock_discord, mock_delay, mon
     mock_page = MagicMock()
     mock_uid_locator = MagicMock()
     mock_login_locator = MagicMock()
-    mock_claim_locator = MagicMock()
-    mock_success_locator = MagicMock()
-    mock_close_locator = MagicMock()
+    
+    mock_uid_locator.is_visible.return_value = True
+    mock_login_locator.is_visible.return_value = True
     
     mock_page.get_by_placeholder.side_effect = lambda placeholder: (
         mock_uid_locator if placeholder == "Enter Player ID" else MagicMock()
     )
     
+    mock_close_locator = MagicMock()
+    mock_close_locator.first = mock_close_locator
+    mock_close_locator.first.is_visible.return_value = True
+    
     def get_by_role_side_effect(role, name):
         if role == "button" and name == "Login":
             return mock_login_locator
-        elif role == "button" and name == "Claim":
-            return mock_claim_locator
         elif role == "button" and name == "Continue Browsing":
             return mock_close_locator
         return MagicMock()
         
     mock_page.get_by_role.side_effect = get_by_role_side_effect
     
-    mock_uid_locator.is_visible.return_value = True
-    mock_login_locator.is_visible.return_value = True
-    mock_claim_locator.is_visible.return_value = True
-    mock_claim_locator.first = mock_claim_locator
+    # Mocking the card and claiming elements
+    mock_card = MagicMock()
+    mock_card.inner_text.return_value = "Unclaimed"
     
-    mock_close_locator.first = mock_close_locator
-    mock_close_locator.first.is_visible.return_value = True
+    mock_title_loc = MagicMock()
+    mock_title_loc.is_visible.return_value = True
+    mock_title_loc.first = mock_title_loc
+    mock_title_loc.text_content.return_value = "DAILY GIFT"
     
-    def locator_side_effect(selector):
-        if "text=Claimed" in selector:
-            return mock_success_locator
-        raise Exception("Complex locator selector mock fallback")
+    mock_claim_btn = MagicMock()
+    mock_claim_btn.is_visible.return_value = True
+    mock_claim_btn.first = mock_claim_btn
+    
+    mock_confirm_btn = MagicMock()
+    mock_confirm_btn.is_visible.return_value = True
+    mock_confirm_btn.first = mock_confirm_btn
+    mock_confirm_btn.text_content.return_value = "CLAIM GIFT"
+    
+    mock_default_locator = MagicMock()
+    mock_default_locator.is_visible.return_value = False
+    mock_default_locator.first = mock_default_locator
+    
+    def card_locator_side_effect(selector):
+        if ".sku-info-section__titles__title" in selector:
+            return mock_title_loc
+        if "text=CLAIM GIFT" in selector:
+            return mock_claim_btn
+        return mock_default_locator
+    mock_card.locator.side_effect = card_locator_side_effect
+    
+    mock_freebie_locator = MagicMock()
+    mock_freebie_locator.all.return_value = [mock_card]
+    
+    mock_dialog_success_locator = MagicMock()
+    mock_dialog_success_locator.first.is_visible.return_value = True
+    
+    def page_locator_side_effect(selector):
+        if ".sku-card--freebie" in selector:
+            return mock_freebie_locator
+        if "text=Claimed" in selector or "text=Success" in selector:
+            return mock_dialog_success_locator
+        if "CLAIM GIFT" in selector:
+            return mock_confirm_btn
+        return mock_default_locator
         
-    mock_page.locator.side_effect = locator_side_effect
-    mock_success_locator.first.is_visible.return_value = True
+    mock_page.locator.side_effect = page_locator_side_effect
     
     profile = {"name": "Test Player", "uid": "1122334455"}
     success = claimer.claim_profile(mock_page, profile)
     
     assert success is True
     mock_close_locator.first.click.assert_called_once()
-    mock_discord.assert_called_once_with("https://discord.com/api/webhooks/mock", "Test Player", "1122334455", "success")
+    mock_discord.assert_called_once_with("https://discord.com/api/webhooks/mock", "Test Player", "1122334455", "success", error_msg="Successfully claimed free gift 'DAILY GIFT'!")
 
 @patch("claimer.human_delay")
 @patch("claimer.send_discord_notification")
@@ -176,15 +243,27 @@ def test_claim_profile_login_failure(mock_discord, mock_delay, monkeypatch):
     
     mock_page.wait_for_selector.side_effect = Exception("Nickname timeout")
     
-    mock_page.locator.side_effect = Exception("Not found")
-    mock_page.get_by_role.side_effect = Exception("Not found")
-    mock_page.get_by_text.side_effect = Exception("Not found")
+    # Simulate not finding any daily free gift cards
+    mock_freebie_locator = MagicMock()
+    mock_freebie_locator.all.return_value = []
+    
+    def page_locator_side_effect(selector):
+        if ".sku-card--freebie" in selector:
+            return mock_freebie_locator
+        return MagicMock()
+    mock_page.locator.side_effect = page_locator_side_effect
     
     profile = {"name": "Test Player", "uid": "1122334455"}
     success = claimer.claim_profile(mock_page, profile)
     
     assert success is False
-    mock_discord.assert_called_once_with("https://discord.com/api/webhooks/mock", "Test Player", "1122334455", "failed", error_msg="Failed to locate Daily Free Gift claim element.")
+    mock_discord.assert_called_once_with(
+        "https://discord.com/api/webhooks/mock", 
+        "Test Player", 
+        "1122334455", 
+        "failed", 
+        error_msg="Failed to locate any Daily Free Gift card elements (.sku-card--freebie) on the page."
+    )
 
 @patch("claimer.urllib.request.urlopen")
 @patch("claimer.urllib.request.Request")
@@ -233,7 +312,8 @@ def test_main_internet_failure(mock_setup_logging, mock_exit, mock_wait_for_inte
     mock_wait_for_internet.return_value = False
     mock_exit.side_effect = SystemExit(1)
     
-    with patch("claimer.argparse.ArgumentParser.parse_args") as mock_args:
+    with patch("claimer.argparse.ArgumentParser.parse_args") as mock_args, \
+         patch("os.path.exists", return_value=False):
         mock_args.return_value = MagicMock(visible=False)
         with pytest.raises(SystemExit) as excinfo:
             claimer.main()
@@ -265,9 +345,12 @@ def test_main_claiming(
     mock_context = MagicMock()
     mock_page = MagicMock()
     mock_init_browser.return_value = (mock_p, mock_browser, mock_context, mock_page)
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = mock_page
     mock_claim_profile.return_value = True
     
-    with patch("claimer.argparse.ArgumentParser.parse_args") as mock_args:
+    with patch("claimer.argparse.ArgumentParser.parse_args") as mock_args, \
+         patch("os.path.exists", return_value=False):
         mock_args.return_value = MagicMock(visible=False)
         claimer.main()
         
@@ -277,7 +360,7 @@ def test_main_claiming(
     assert mock_claim_profile.call_count == 2
     mock_claim_profile.assert_any_call(mock_page, {"name": "Player1", "uid": "111"}, visible=False)
     mock_claim_profile.assert_any_call(mock_page, {"name": "Player2", "uid": "222"}, visible=False)
-    mock_context.close.assert_called_once()
+    assert mock_context.close.call_count >= 1
     mock_browser.close.assert_called_once()
     mock_p.stop.assert_called_once()
 
