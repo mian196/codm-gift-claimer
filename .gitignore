@@ -5,7 +5,8 @@ config/settings.json
 config/state.json
 logs/*
 state/*
-.planning/
+.planning/*
+scratch/*
 
 
 # Byte-compiled / optimized / DLL files

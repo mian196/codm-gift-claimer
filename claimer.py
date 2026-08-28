@@ -277,6 +277,21 @@ def claim_profile(page, profile, visible=False):
         
     logger.info(f"--- Processing Profile: {mask_name(name)} (UID: {mask_uid(uid)}) ---")
     
+    # Register listener to capture in-game nickname from store API
+    in_game_nickname = None
+    def capture_validate_response(res):
+        nonlocal in_game_nickname
+        if "validate" in res.url and res.status == 200:
+            try:
+                data = res.json()
+                nick = data.get("result", {}).get("nickname")
+                if nick:
+                    in_game_nickname = nick
+            except Exception:
+                pass
+
+    page.on("response", capture_validate_response)
+    
     try:
         # Navigate to Call of Duty: Mobile Store
         logger.info("Navigating to Call of Duty: Mobile Store...")
@@ -406,31 +421,21 @@ def claim_profile(page, profile, visible=False):
             login_btn.click()
             human_delay(2.0, 4.0)
         else:
-            logger.info("No explicit Login button found on the page. Pressing Enter on UID field to trigger validation...")
+            logger.info("No explicit Login button found on the page. Triggering input validation...")
             try:
                 uid_field.press("Enter")
+                uid_field.evaluate("el => el.dispatchEvent(new Event('blur', { bubbles: true }))")
                 human_delay(2.0, 4.0)
             except Exception as press_err:
-                logger.warning(f"Could not press Enter on UID field: {press_err}")
+                logger.warning(f"Could not trigger blur on UID field: {press_err}")
         
-        # Verify Player Nickname Displays on screen (non-blocking)
-        logger.info("Verifying player nickname...")
-        verified = False
-        try:
-            page.wait_for_selector(f"text={name}", timeout=5000)
-            logger.info(f"Verified: {mask_name(name)} is displayed on the page.")
-            verified = True
-        except Exception:
-            try:
-                logout_found = page.locator("text=Logout").first.is_visible() or page.locator("text=Sign Out").first.is_visible()
-                if logout_found:
-                    logger.info("Verified: Session is active (Logout/Sign Out option visible), assuming successfully logged in.")
-                    verified = True
-            except Exception:
-                pass
-
-        if not verified:
-            logger.warning(f"Warning: Nickname '{mask_name(name)}' or active session not explicitly detected yet. Proceeding to claim, as validation may occur during the claim step.")
+        # Verify Player Nickname / Validation response
+        logger.info("Verifying player authentication...")
+        human_delay(1.5, 3.0)
+        if in_game_nickname:
+            logger.info(f"Validated player on store: In-game Nickname '{mask_name(in_game_nickname)}' (Profile label: '{mask_name(name)}')")
+        else:
+            logger.info(f"Proceeding with profile '{mask_name(name)}'...")
 
         # Loop to locate and claim ALL available unclaimed gifts
         gift_index = 0
@@ -441,7 +446,7 @@ def claim_profile(page, profile, visible=False):
             
             # Ensure any open modals/dialogs from previous attempts are closed
             try:
-                close_btn = page.locator("[class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X'), [role='dialog'] button:has-text('✕'), button:has-text('GO BACK')").first
+                close_btn = page.locator("[class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X'), [role='dialog'] button:has-text('✕'), button:has-text('GO BACK'), button:has-text('CONTINUE BROWSING')").first
                 if close_btn.is_visible():
                     logger.info("Found an open dialog. Closing it to ensure clean state...")
                     close_btn.click(timeout=3000)
@@ -459,7 +464,7 @@ def claim_profile(page, profile, visible=False):
             
             if gift_index >= len(gift_cards):
                 if claimed_gifts_count > 0:
-                    logger.info(f"Finished claiming all available gifts for this profile. Total claimed: {claimed_gifts_count}")
+                    logger.info(f"Finished processing available gifts for profile '{mask_name(name)}'. Total newly claimed: {claimed_gifts_count}")
                     return True
                 else:
                     # Check if all gifts were already claimed (no claims performed, but cards were present)
@@ -471,13 +476,11 @@ def claim_profile(page, profile, visible=False):
                             break
                             
                     if all_claimed:
-                        logger.info("All available free gifts have already been claimed today.")
-                        webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
-                        if webhook_url:
-                            send_discord_notification(webhook_url, name, uid, "success", error_msg="All available free gifts have already been claimed today.")
+                        logger.info(f"All available free gifts have already been claimed today for '{mask_name(name)}'.")
                         return True
                     else:
-                        raise Exception("Failed to process the unclaimed free gifts correctly.")
+                        logger.info(f"No unclaimed free gifts available for '{mask_name(name)}'.")
+                        return True
 
             card = gift_cards[gift_index]
             card_text = card.inner_text() or ""
@@ -592,41 +595,27 @@ def claim_profile(page, profile, visible=False):
                     continue
                     
             if confirm_btn:
-                try:
-                    if name.lower() in page.content().lower():
-                        logger.info(f"Double confirmed: Player name '{mask_name(name)}' detected in page content.")
-                except Exception:
-                    pass
                 human_delay(1.0, 2.5) # Stealth delay before clicking Confirmation button
                 logger.info("Clicking confirmation button...")
                 confirm_btn.click()
-                human_delay(2.0, 4.0)
+                human_delay(2.5, 4.5)
             
-            # Verify Success
+            # Verify Success strictly within active modal / dialog text
             logger.info("Verifying claim success...")
-            human_delay(2.0, 4.0)
-            
-            success_indicators = [
-                "Claimed",
-                "Successfully claimed",
-                "Received",
-                "Success",
-                "Success!",
-                "claimed",
-                "received"
-            ]
+            human_delay(1.5, 3.0)
             
             success_detected = False
-            for text in success_indicators:
-                try:
-                    if page.locator(f"text={text}").first.is_visible():
-                        logger.info(f"Success confirmation detected: '{text}'")
-                        success_detected = True
-                        break
-                except Exception:
-                    continue
-                    
-            if not success_detected:
+            active_modal = page.locator("[role='dialog'], .sheet-dialog, .freebie-redeem-modal").first
+            
+            if active_modal.is_visible():
+                modal_text = active_modal.inner_text() or ""
+                if "GIFT CLAIMED" in modal_text.upper() or "CHECK YOUR COD:M INBOX" in modal_text.upper() or "SUCCESSFULLY CLAIMED" in modal_text.upper():
+                    logger.info("Success confirmation detected inside modal: 'GIFT CLAIMED'")
+                    success_detected = True
+                elif "NOT ELIGIBLE" in modal_text.upper() or "ALREADY CLAIMED" in modal_text.upper():
+                    logger.info(f"Modal response: Gift '{card_title}' was already claimed today or is locked.")
+            else:
+                # Fallback: check if card button text updated to 'Claimed'
                 try:
                     btn_text = claim_element.text_content() or ""
                     if "claimed" in btn_text.lower():
@@ -638,12 +627,13 @@ def claim_profile(page, profile, visible=False):
             webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
             
             if success_detected:
-                logger.info(f"Successfully claimed '{card_title}' for {mask_name(name)} ({mask_uid(uid)})!")
+                display_nick = in_game_nickname if in_game_nickname else name
+                logger.info(f"Successfully claimed '{card_title}' for {mask_name(display_nick)} ({mask_uid(uid)})!")
                 claimed_gifts_count += 1
                 if webhook_url:
-                    send_discord_notification(webhook_url, name, uid, "success", error_msg=f"Successfully claimed free gift '{card_title}'!")
+                    send_discord_notification(webhook_url, display_nick, uid, "success", error_msg=f"Successfully claimed free gift '{card_title}'!")
                 
-                # Safely dismiss the CP buy popup if visible to avoid accidental purchases
+                # Safely dismiss the CP buy popup / modal if visible
                 try:
                     close_selectors = [
                         lambda p: p.get_by_role("button", name="Continue Browsing"),
@@ -658,8 +648,8 @@ def claim_profile(page, profile, visible=False):
                         try:
                             locator = strategy(page)
                             if locator.first.is_visible():
-                                human_delay(1.0, 2.5) # Stealth delay before closing popup
-                                logger.info(f"Closing CP buy popup using selector strategy {idx + 1}...")
+                                human_delay(1.0, 2.5)
+                                logger.info(f"Closing success popup using selector strategy {idx + 1}...")
                                 locator.first.click()
                                 human_delay(1.5, 3.0)
                                 break
@@ -671,14 +661,8 @@ def claim_profile(page, profile, visible=False):
                 # Move to next gift
                 gift_index += 1
             else:
-                logger.warning(f"Warning: No explicit success confirmation popup detected for {mask_name(name)} on '{card_title}'. Assuming it may have been claimed silently.")
-                claimed_gifts_count += 1
-                if webhook_url:
-                    send_discord_notification(webhook_url, name, uid, "success", error_msg=f"Claimed free gift '{card_title}' (silent success assumed).")
-                
-                # Move to next gift
+                logger.warning(f"Warning: Could not confirm claim success for '{card_title}' on profile {mask_name(name)}.")
                 gift_index += 1
-            
     except Exception as e:
         logger.error(f"Error claiming gift for profile '{mask_name(name)}': {e}")
         try:
