@@ -295,13 +295,21 @@ def claim_profile(page, profile, visible=False):
     try:
         # Navigate to Call of Duty: Mobile Store
         logger.info("Navigating to Call of Duty: Mobile Store...")
-        page.goto("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=30000)
+        page.goto("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=60000)
         
+        # Check if stuck on regional splash/loading page (/international) and wait for store redirect
+        try:
+            if "international" in page.url or "Loading..." in page.content() or page.locator("text=THE WEB STORE IS AVAILABLE IN").first.is_visible():
+                logger.info("Detected regional landing/splash page, waiting for redirect to store...")
+                page.wait_for_url(lambda u: "international" not in u and "store.callofdutymobile.com" in u, timeout=15000)
+        except Exception:
+            pass
+
         # Wait for the page to finish loading (either UID input or the age/privacy modal appears)
         logger.info("Waiting for page elements to load...")
         combined_load_selector = "input#userId, input[name='userId'], input[placeholder*='ID' i], span:has-text('Yes, I am.'), button:has-text('Yes, I am')"
         try:
-            page.wait_for_selector(combined_load_selector, state="visible", timeout=20000)
+            page.wait_for_selector(combined_load_selector, state="visible", timeout=30000)
             logger.info("Page elements loaded successfully.")
         except Exception as e:
             logger.warning(f"Timeout or error waiting for page elements to load: {e}")
@@ -368,6 +376,12 @@ def claim_profile(page, profile, visible=False):
             lambda p: p.locator("input#userid"),
         ]
         
+        # Wait up to 15 seconds for UID input field to become visible
+        try:
+            page.wait_for_selector("input#userId, input[name='userId'], input[placeholder*='ID' i]", timeout=15000)
+        except Exception:
+            pass
+
         for idx, strategy in enumerate(uid_selectors):
             try:
                 locator = strategy(page)
@@ -598,23 +612,32 @@ def claim_profile(page, profile, visible=False):
                 human_delay(1.0, 2.5) # Stealth delay before clicking Confirmation button
                 logger.info("Clicking confirmation button...")
                 confirm_btn.click()
-                human_delay(2.5, 4.5)
+                human_delay(1.5, 3.0)
             
             # Verify Success strictly within active modal / dialog text
             logger.info("Verifying claim success...")
-            human_delay(1.5, 3.0)
             
             success_detected = False
-            active_modal = page.locator("[role='dialog'], .sheet-dialog, .freebie-redeem-modal").first
-            
-            if active_modal.is_visible():
-                modal_text = active_modal.inner_text() or ""
-                if "GIFT CLAIMED" in modal_text.upper() or "CHECK YOUR COD:M INBOX" in modal_text.upper() or "SUCCESSFULLY CLAIMED" in modal_text.upper():
-                    logger.info("Success confirmation detected inside modal: 'GIFT CLAIMED'")
-                    success_detected = True
-                elif "NOT ELIGIBLE" in modal_text.upper() or "ALREADY CLAIMED" in modal_text.upper():
-                    logger.info(f"Modal response: Gift '{card_title}' was already claimed today or is locked.")
-            else:
+            try:
+                success_modal_selector = "[role='dialog']:has-text('GIFT CLAIMED'), [role='dialog']:has-text('inbox'), .sheet-dialog:has-text('GIFT CLAIMED'), .freebie-redeem-modal:has-text('GIFT CLAIMED')"
+                page.wait_for_selector(success_modal_selector, state="visible", timeout=12000)
+                logger.info("Success confirmation detected inside modal: 'GIFT CLAIMED'")
+                success_detected = True
+            except Exception:
+                # Check if modal explicitly shows GIFT CLAIMED or ineligible
+                try:
+                    active_modal = page.locator("[role='dialog'], .sheet-dialog, .freebie-redeem-modal").first
+                    if active_modal.is_visible():
+                        modal_text = active_modal.inner_text() or ""
+                        if "GIFT CLAIMED" in modal_text.upper() or "CHECK YOUR COD:M INBOX" in modal_text.upper() or "SUCCESSFULLY CLAIMED" in modal_text.upper():
+                            logger.info("Success confirmation detected inside modal: 'GIFT CLAIMED'")
+                            success_detected = True
+                        elif "NOT ELIGIBLE" in modal_text.upper() or "ALREADY CLAIMED" in modal_text.upper():
+                            logger.info(f"Modal response: Gift '{card_title}' was already claimed today or is locked.")
+                except Exception:
+                    pass
+                    
+            if not success_detected:
                 # Fallback: check if card button text updated to 'Claimed'
                 try:
                     btn_text = claim_element.text_content() or ""
