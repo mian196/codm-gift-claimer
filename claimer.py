@@ -183,9 +183,10 @@ def send_discord_notification(webhook_url, player_name, uid, status, error_msg=N
     }
     
     if error_msg:
-        # Truncate error to fit Discord's embed field value limit (1024 chars)
+        # Truncate message to fit Discord's embed field value limit (1024 chars)
         truncated = error_msg[:900] + "..." if len(error_msg) > 900 else error_msg
-        embed["fields"].append({"name": "Error Details", "value": f"```{truncated}```", "inline": False})
+        field_name = "Gift Details" if status == "success" else "Error Details"
+        embed["fields"].append({"name": field_name, "value": f"```{truncated}```", "inline": False})
         
     payload = {
         "embeds": [embed]
@@ -203,7 +204,9 @@ def send_discord_notification(webhook_url, player_name, uid, status, error_msg=N
             method="POST"
         )
         with urllib.request.urlopen(req, timeout=10) as response:
-            if response.status not in (200, 204):
+            if response.status in (200, 204):
+                logger.info(f"Discord notification sent successfully ({status}).")
+            else:
                 logger.warning(f"Discord Webhook returned status code: {response.status}")
     except Exception as e:
         logger.error(f"Failed to send Discord notification: {e}")
@@ -277,20 +280,40 @@ def claim_profile(page, profile, visible=False):
         
     logger.info(f"--- Processing Profile: {mask_name(name)} (UID: {mask_uid(uid)}) ---")
     
-    # Register listener to capture in-game nickname from store API
+    # Register listener to capture in-game nickname and claim API responses from store API
     in_game_nickname = None
-    def capture_validate_response(res):
-        nonlocal in_game_nickname
-        if "validate" in res.url and res.status == 200:
-            try:
-                data = res.json()
-                nick = data.get("result", {}).get("nickname")
-                if nick:
-                    in_game_nickname = nick
-            except Exception:
-                pass
+    claim_api_success = False
+    claim_api_error = None
+    
+    def capture_network_response(res):
+        nonlocal in_game_nickname, claim_api_success, claim_api_error
+        try:
+            url_lower = res.url.lower()
+            if "validate" in url_lower and res.status == 200:
+                try:
+                    data = res.json()
+                    nick = data.get("result", {}).get("nickname") or data.get("nickname")
+                    if nick:
+                        in_game_nickname = nick
+                except Exception:
+                    pass
+                    
+            # Capture freebie claim API responses (e.g. claim-freebie-reward, claim_reward, /claim)
+            is_static_asset = any(url_lower.endswith(ext) or ext in url_lower for ext in [".css", ".js", ".png", ".jpg", ".svg", ".woff", ".webp"])
+            if not is_static_asset and any(kw in url_lower for kw in ["claim-freebie-reward", "claim-reward", "claim_reward", "/claim-freebie", "/claim"]):
+                if res.status in (200, 201, 204):
+                    claim_api_success = True
+                    logger.info(f"Captured successful claim API response (HTTP {res.status}) from: {res.url}")
+                else:
+                    try:
+                        err_json = res.json()
+                        claim_api_error = err_json.get("message") or str(err_json)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
-    page.on("response", capture_validate_response)
+    page.on("response", capture_network_response)
     
     try:
         # Navigate to Call of Duty: Mobile Store
@@ -608,44 +631,86 @@ def claim_profile(page, profile, visible=False):
                 except Exception:
                     continue
                     
+            # Reset claim API flag before confirmation
+            claim_api_success = False
+            claim_api_error = None
+
             if confirm_btn:
                 human_delay(1.0, 2.5) # Stealth delay before clicking Confirmation button
                 logger.info("Clicking confirmation button...")
                 confirm_btn.click()
-                human_delay(1.5, 3.0)
             
-            # Verify Success strictly within active modal / dialog text
+            # Verify claim success with multi-strategy polling (API response + DOM success indicators + Card text update)
             logger.info("Verifying claim success...")
             
             success_detected = False
-            try:
-                success_modal_selector = "[role='dialog']:has-text('GIFT CLAIMED'), [role='dialog']:has-text('inbox'), .sheet-dialog:has-text('GIFT CLAIMED'), .freebie-redeem-modal:has-text('GIFT CLAIMED')"
-                page.wait_for_selector(success_modal_selector, state="visible", timeout=12000)
-                logger.info("Success confirmation detected inside modal: 'GIFT CLAIMED'")
-                success_detected = True
-            except Exception:
-                # Check if modal explicitly shows GIFT CLAIMED or ineligible
-                try:
-                    active_modal = page.locator("[role='dialog'], .sheet-dialog, .freebie-redeem-modal").first
-                    if active_modal.is_visible():
-                        modal_text = active_modal.inner_text() or ""
-                        if "GIFT CLAIMED" in modal_text.upper() or "CHECK YOUR COD:M INBOX" in modal_text.upper() or "SUCCESSFULLY CLAIMED" in modal_text.upper():
-                            logger.info("Success confirmation detected inside modal: 'GIFT CLAIMED'")
+            ineligible_detected_post = False
+            
+            poll_start = time.time()
+            while time.time() - poll_start < 8.0:
+                # Strategy 1: Network API response captured
+                if claim_api_success:
+                    logger.info("Success confirmation detected: API returned 200 OK for freebie claim.")
+                    success_detected = True
+                    break
+                    
+                # Strategy 2: Modal Success indicators & 'CONTINUE BROWSING' button
+                success_indicators = [
+                    lambda p: p.locator("button:has-text('CONTINUE BROWSING')"),
+                    lambda p: p.locator("button:has-text('Continue Browsing')"),
+                    lambda p: p.locator("text=/gift claimed/i"),
+                    lambda p: p.locator("text=/check your.*inbox/i"),
+                    lambda p: p.locator("text=/check your.*mailbox/i"),
+                    lambda p: p.locator("text=/successfully claimed/i"),
+                    lambda p: p.locator("text=/congratulations/i"),
+                    lambda p: p.locator("text=/enjoy your gift/i"),
+                ]
+                
+                for indicator in success_indicators:
+                    try:
+                        loc = indicator(page)
+                        if loc.first.is_visible():
+                            logger.info("Success confirmation detected inside modal/page via UI indicator.")
                             success_detected = True
-                        elif "NOT ELIGIBLE" in modal_text.upper() or "ALREADY CLAIMED" in modal_text.upper():
+                            break
+                    except Exception:
+                        continue
+                        
+                if success_detected:
+                    break
+                    
+                # Strategy 3: Check for modal ineligibility / already claimed
+                ineligible_post_indicators = [
+                    lambda p: p.locator("text=/not eligible/i"),
+                    lambda p: p.locator("text=/already claimed/i"),
+                    lambda p: p.locator("text=/limit reached/i"),
+                ]
+                for inelig in ineligible_post_indicators:
+                    try:
+                        loc = inelig(page)
+                        if loc.first.is_visible():
                             logger.info(f"Modal response: Gift '{card_title}' was already claimed today or is locked.")
+                            ineligible_detected_post = True
+                            break
+                    except Exception:
+                        continue
+                        
+                if ineligible_detected_post:
+                    break
+                    
+                # Strategy 4: Check if current card updated to 'Claimed'
+                try:
+                    current_card = page.locator(".sku-card--freebie").nth(gift_index)
+                    if current_card.is_visible():
+                        current_card_text = current_card.inner_text() or ""
+                        if "claimed" in current_card_text.lower() and "claim gift" not in current_card_text.lower():
+                            logger.info("Success confirmation detected: Store card updated to 'Claimed'.")
+                            success_detected = True
+                            break
                 except Exception:
                     pass
                     
-            if not success_detected:
-                # Fallback: check if card button text updated to 'Claimed'
-                try:
-                    btn_text = claim_element.text_content() or ""
-                    if "claimed" in btn_text.lower():
-                        logger.info("Success confirmation detected: Button text updated to 'Claimed'.")
-                        success_detected = True
-                except Exception:
-                    pass
+                time.sleep(0.5)
                     
             webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
             
@@ -659,22 +724,22 @@ def claim_profile(page, profile, visible=False):
                 # Safely dismiss the CP buy popup / modal if visible
                 try:
                     close_selectors = [
-                        lambda p: p.get_by_role("button", name="Continue Browsing"),
                         lambda p: p.locator("button:has-text('CONTINUE BROWSING')"),
-                        lambda p: p.locator("button:has-text('Continue')"),
-                        lambda p: p.locator("[class*='modal' i] button:has-text('Continue')"),
+                        lambda p: p.locator("button:has-text('Continue Browsing')"),
                         lambda p: p.locator("[class*='modal' i] button:has-text('✕')"),
                         lambda p: p.locator("[class*='modal' i] button:has-text('X')"),
+                        lambda p: p.locator("[role='dialog'] button:has-text('✕')"),
+                        lambda p: p.locator("button:has-text('Continue')"),
                         lambda p: p.locator(".modal-close, .close-btn, .close"),
                     ]
                     for idx, strategy in enumerate(close_selectors):
                         try:
                             locator = strategy(page)
                             if locator.first.is_visible():
-                                human_delay(1.0, 2.5)
+                                human_delay(0.8, 1.8)
                                 logger.info(f"Closing success popup using selector strategy {idx + 1}...")
-                                locator.first.click()
-                                human_delay(1.5, 3.0)
+                                locator.first.click(timeout=3000)
+                                human_delay(1.0, 2.0)
                                 break
                         except Exception:
                             continue
@@ -683,7 +748,28 @@ def claim_profile(page, profile, visible=False):
                 
                 # Move to next gift
                 gift_index += 1
+            elif ineligible_detected_post:
+                try:
+                    page.locator("button:has-text('GO BACK'), [class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X')").first.click(timeout=2000)
+                except Exception:
+                    pass
+                gift_index += 1
             else:
+                # Final check before giving up: check if store card is now Claimed
+                try:
+                    current_card = page.locator(".sku-card--freebie").nth(gift_index)
+                    if current_card.is_visible() and "claimed" in (current_card.inner_text() or "").lower():
+                        logger.info("Late confirmation: Store card is marked 'Claimed'.")
+                        display_nick = in_game_nickname if in_game_nickname else name
+                        logger.info(f"Successfully claimed '{card_title}' for {mask_name(display_nick)} ({mask_uid(uid)})!")
+                        claimed_gifts_count += 1
+                        if webhook_url:
+                            send_discord_notification(webhook_url, display_nick, uid, "success", error_msg=f"Successfully claimed free gift '{card_title}'!")
+                        gift_index += 1
+                        continue
+                except Exception:
+                    pass
+                    
                 logger.warning(f"Warning: Could not confirm claim success for '{card_title}' on profile {mask_name(name)}.")
                 gift_index += 1
     except Exception as e:
