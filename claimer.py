@@ -14,11 +14,43 @@ from playwright.sync_api import sync_playwright, Error
 # Initialize named logger
 logger = logging.getLogger("claimer")
 
-def setup_logging(log_path="logs/claimer.log"):
+def cleanup_old_files(directory="logs", pattern_ext=".log", max_files=5):
     """
-    Sets up unified logging to both standard output and logs/claimer.log.
+    Keeps the newest max_files in directory matching pattern_ext and deletes older files.
     """
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    try:
+        if not os.path.exists(directory):
+            return
+        matched_files = []
+        for f in os.listdir(directory):
+            if f.endswith(pattern_ext):
+                full_path = os.path.join(directory, f)
+                if os.path.isfile(full_path):
+                    matched_files.append((os.path.getmtime(full_path), full_path))
+        matched_files.sort(key=lambda x: x[0])  # oldest first
+        while len(matched_files) > max_files:
+            oldest = matched_files.pop(0)
+            try:
+                os.remove(oldest[1])
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def setup_logging(log_path=None, logs_dir="logs", max_logs=5):
+    """
+    Sets up unified logging to stdout and a per-run timestamped log file in logs_dir.
+    Retains a maximum of max_logs newest log files.
+    """
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    if log_path is None:
+        cleanup_old_files(directory=logs_dir, pattern_ext=".log", max_files=max(0, max_logs - 1))
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        log_path = os.path.join(logs_dir, f"claimer_{timestamp}.log")
+    else:
+        os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+        
     logger.setLevel(logging.INFO)
     
     # Avoid duplicate handlers

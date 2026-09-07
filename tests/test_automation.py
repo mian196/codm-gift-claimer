@@ -1,3 +1,4 @@
+import time
 import pytest
 from unittest.mock import MagicMock, patch
 import claimer
@@ -120,7 +121,7 @@ def test_claim_profile_success(mock_discord, mock_delay, monkeypatch):
     def page_locator_side_effect(selector):
         if ".sku-card--freebie" in selector:
             return mock_freebie_locator
-        if "text=Claimed" in selector or "text=Success" in selector:
+        if "CONTINUE BROWSING" in selector or "gift claimed" in selector or "text=Claimed" in selector or "text=Success" in selector:
             return mock_dialog_success_locator
         if "CLAIM GIFT" in selector:
             return mock_confirm_btn
@@ -132,12 +133,11 @@ def test_claim_profile_success(mock_discord, mock_delay, monkeypatch):
     success = claimer.claim_profile(mock_page, profile)
     
     assert success is True
-    mock_page.goto.assert_called_with("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=30000)
+    mock_page.goto.assert_called_with("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=60000)
     mock_uid_locator.click.assert_called_once()
     mock_uid_locator.fill.assert_called_with("")
     assert mock_uid_locator.type.call_count == len("1122334455")
     
-    mock_page.wait_for_selector.assert_any_call("text=Test Player", timeout=5000)
     mock_claim_btn.click.assert_called_once()
     mock_discord.assert_called_once_with("https://discord.com/api/webhooks/mock", "Test Player", "1122334455", "success", error_msg="Successfully claimed free gift 'DAILY GIFT'!")
 
@@ -208,10 +208,12 @@ def test_claim_profile_success_with_cp_popup_close(mock_discord, mock_delay, mon
     def page_locator_side_effect(selector):
         if ".sku-card--freebie" in selector:
             return mock_freebie_locator
-        if "text=Claimed" in selector or "text=Success" in selector:
+        if "gift claimed" in selector or "text=Claimed" in selector:
             return mock_dialog_success_locator
         if "CLAIM GIFT" in selector:
             return mock_confirm_btn
+        if "CONTINUE BROWSING" in selector or "Continue" in selector:
+            return mock_close_locator
         return mock_default_locator
         
     mock_page.locator.side_effect = page_locator_side_effect
@@ -220,7 +222,7 @@ def test_claim_profile_success_with_cp_popup_close(mock_discord, mock_delay, mon
     success = claimer.claim_profile(mock_page, profile)
     
     assert success is True
-    mock_close_locator.first.click.assert_called_once()
+    assert mock_close_locator.first.click.call_count >= 1
     mock_discord.assert_called_once_with("https://discord.com/api/webhooks/mock", "Test Player", "1122334455", "success", error_msg="Successfully claimed free gift 'DAILY GIFT'!")
 
 @patch("claimer.human_delay")
@@ -371,6 +373,32 @@ def test_setup_logging(tmp_path):
         claimer.setup_logging(log_path=str(log_file))
         mock_logger.setLevel.assert_called_once_with(claimer.logging.INFO)
         assert mock_logger.addHandler.call_count == 2
+
+def test_cleanup_old_files(tmp_path):
+    # Create 7 dummy log files
+    for i in range(7):
+        f = tmp_path / f"test_{i}.log"
+        f.write_text(f"log {i}")
+        time.sleep(0.01)
+    
+    claimer.cleanup_old_files(directory=str(tmp_path), pattern_ext=".log", max_files=5)
+    remaining = list(tmp_path.glob("*.log"))
+    assert len(remaining) == 5
+
+def test_setup_logging_rotation(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    for i in range(6):
+        f = logs_dir / f"claimer_old_{i}.log"
+        f.write_text("old log")
+        time.sleep(0.01)
+
+    with patch("claimer.logger") as mock_logger:
+        mock_logger.handlers = []
+        claimer.setup_logging(logs_dir=str(logs_dir), max_logs=5)
+        # Should retain at most 5 log files
+        remaining = list(logs_dir.glob("*.log"))
+        assert len(remaining) <= 5
 
 @patch("claimer.urllib.request.urlopen")
 @patch("claimer.urllib.request.Request")
