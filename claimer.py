@@ -808,8 +808,12 @@ def claim_profile(page, profile, visible=False):
         logger.error(f"Error claiming gift for profile '{mask_name(name)}': {e}")
         try:
             os.makedirs("logs", exist_ok=True)
-            page.screenshot(path="logs/error_screenshot.png")
-            logger.info("Saved error screenshot to logs/error_screenshot.png")
+            safe_name = "".join(c for c in name if c.isalnum() or c in ("-", "_")).strip() or "account"
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            screenshot_path = os.path.join("logs", f"error_{safe_name}_{timestamp}.png")
+            page.screenshot(path=screenshot_path)
+            logger.info(f"Saved error screenshot to {screenshot_path}")
+            cleanup_old_files(directory="logs", pattern_ext=".png", max_files=10)
         except Exception as screenshot_err:
             logger.warning(f"Could not take error screenshot: {screenshot_err}")
         webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")

@@ -259,6 +259,8 @@ def test_claim_profile_login_failure(mock_discord, mock_delay, monkeypatch):
     success = claimer.claim_profile(mock_page, profile)
     
     assert success is False
+    assert mock_page.screenshot.called
+    assert "error_TestPlayer_" in mock_page.screenshot.call_args[1]["path"]
     mock_discord.assert_called_once_with(
         "https://discord.com/api/webhooks/mock", 
         "Test Player", 
