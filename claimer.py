@@ -44,6 +44,14 @@ def setup_logging(log_path=None, logs_dir="logs", max_logs=5):
     """
     os.makedirs(logs_dir, exist_ok=True)
     
+    # Ensure Windows console supports UTF-8 characters in stylized player nicknames
+    if sys.platform == "win32":
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+            
     if log_path is None:
         cleanup_old_files(directory=logs_dir, pattern_ext=".log", max_files=max(0, max_logs - 1))
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -456,9 +464,15 @@ def claim_profile(page, profile, visible=False):
         uid_field.click()
         uid_field.fill("") # Clear input first
         human_delay(0.5, 1.0)
-        for char in uid:
-            uid_field.type(char)
-            time.sleep(random.uniform(0.05, 0.15))
+        try:
+            uid_field.press_sequentially(uid, delay=random.uniform(50, 100))
+        except Exception:
+            try:
+                uid_field.fill(uid)
+            except Exception:
+                for char in uid:
+                    uid_field.type(char)
+                    time.sleep(random.uniform(0.05, 0.15))
             
         human_delay(1.0, 2.5)
         
@@ -520,6 +534,12 @@ def claim_profile(page, profile, visible=False):
                     logger.info("Found an open dialog. Closing it to ensure clean state...")
                     close_btn.click(timeout=3000)
                     human_delay(1.5, 2.5)
+            except Exception:
+                pass
+                
+            # Wait up to 15 seconds for freebie gift cards to render on slow connections
+            try:
+                page.wait_for_selector(".sku-card--freebie", state="attached", timeout=15000)
             except Exception:
                 pass
                 
