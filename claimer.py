@@ -356,9 +356,20 @@ def claim_profile(page, profile, visible=False):
     page.on("response", capture_network_response)
     
     try:
-        # Navigate to Call of Duty: Mobile Store
+        # Navigate to Call of Duty: Mobile Store with auto-retry for transient network errors (e.g. ERR_NETWORK_CHANGED)
         logger.info("Navigating to Call of Duty: Mobile Store...")
-        page.goto("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=60000)
+        nav_success = False
+        for attempt in range(1, 4):
+            try:
+                page.goto("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=60000)
+                nav_success = True
+                break
+            except Exception as nav_err:
+                if attempt < 3:
+                    logger.warning(f"Navigation attempt {attempt} failed ({nav_err}). Retrying in 4 seconds...")
+                    time.sleep(4)
+                else:
+                    raise nav_err
         
         # Check if stuck on regional splash/loading page (/international) and wait for store redirect
         try:
@@ -372,10 +383,16 @@ def claim_profile(page, profile, visible=False):
         logger.info("Waiting for page elements to load...")
         combined_load_selector = "input#userId, input[name='userId'], input[placeholder*='ID' i], span:has-text('Yes, I am.'), button:has-text('Yes, I am')"
         try:
-            page.wait_for_selector(combined_load_selector, state="visible", timeout=30000)
+            page.wait_for_selector(combined_load_selector, state="visible", timeout=25000)
             logger.info("Page elements loaded successfully.")
         except Exception as e:
-            logger.warning(f"Timeout or error waiting for page elements to load: {e}")
+            logger.warning(f"Initial page load timed out or stalled ({e}). Attempting page reload...")
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_selector(combined_load_selector, state="visible", timeout=25000)
+                logger.info("Page elements loaded successfully after reload.")
+            except Exception as reload_err:
+                logger.warning(f"Timeout waiting for elements after reload: {reload_err}")
             
         human_delay(2.0, 4.0)
         

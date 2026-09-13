@@ -418,3 +418,19 @@ def test_send_discord_notification_failure(mock_logger, mock_urlopen):
     mock_urlopen.side_effect = Exception("HTTP Error")
     claimer.send_discord_notification("https://discord.com/api/webhooks/mock", "Player1", "123", "success")
     mock_logger.error.assert_called_once()
+
+@patch("claimer.time.sleep")
+@patch("claimer.human_delay")
+def test_claim_profile_navigation_retry(mock_delay, mock_sleep):
+    mock_page = MagicMock()
+    # First attempt fails with ERR_NETWORK_CHANGED, second attempt succeeds
+    mock_page.goto.side_effect = [Exception("net::ERR_NETWORK_CHANGED"), None]
+    
+    # Then fail on UID so function returns False quickly
+    mock_page.wait_for_selector.side_effect = Exception("Stop early")
+    
+    profile = {"name": "Test Player", "uid": "123456"}
+    claimer.claim_profile(mock_page, profile)
+    
+    # Assert goto was retried
+    assert mock_page.goto.call_count == 2
