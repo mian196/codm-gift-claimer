@@ -913,10 +913,14 @@ def main():
     # 5. Iterate profiles and claim
     browser_started = False
     p_inst, browser, context, page = None, None, None, None
-    success_count = 0
-    failed_count = 0
+    successful_uids = set()
+    failed_profiles = []
+    
+    max_retries = int(SETTINGS.get("MAX_FAIL_RETRIES", 3))
+    retry_delay_sec = int(SETTINGS.get("FAIL_RETRY_DELAY", 10))
     
     try:
+        # Pass 1: Initial attempt for all loaded profiles
         for profile in profiles:
             uid = profile.get("uid")
             name = profile.get("name", "Unknown Player")
@@ -943,9 +947,9 @@ def main():
             success = claim_profile(page, profile, visible=args.visible)
             
             if success:
-                success_count += 1
+                successful_uids.add(uid)
             else:
-                failed_count += 1
+                failed_profiles.append(profile)
                 
             # Close the page and context to ensure clean session state for the next profile
             try:
@@ -958,16 +962,82 @@ def main():
                 pass
                 
             human_delay(3.0, 6.0)
+
+        # Retry loop for failed accounts: after doing all accounts, retry failed accounts with a 10-second wait between attempts (max 3 retries)
+        retry_round = 0
+        while failed_profiles and retry_round < max_retries:
+            retry_round += 1
+            logger.info(
+                f"Processing {len(failed_profiles)} failed account(s) - "
+                f"Waiting {retry_delay_sec} seconds before retry round {retry_round}/{max_retries}..."
+            )
+            time.sleep(retry_delay_sec)
+            
+            still_failed = []
+            for profile in failed_profiles:
+                uid = profile.get("uid")
+                name = profile.get("name", "Unknown Player")
+                logger.info(f"Retrying failed profile '{mask_name(name)}' (UID: {mask_uid(uid)}) [Attempt {retry_round}/{max_retries}]...")
+                
+                # Create a fresh, isolated context and page for retried profile
+                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                context = browser.new_context(
+                    user_agent=user_agent,
+                    viewport={"width": 1280, "height": 720},
+                    device_scale_factor=1,
+                    bypass_csp=True
+                )
+                page = context.new_page()
+                page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                
+                success = claim_profile(page, profile, visible=args.visible)
+                
+                if success:
+                    logger.info(f"Retry succeeded for profile '{mask_name(name)}' on attempt {retry_round}!")
+                    successful_uids.add(uid)
+                else:
+                    logger.warning(f"Retry failed for profile '{mask_name(name)}' on attempt {retry_round}.")
+                    still_failed.append(profile)
+                    
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                try:
+                    context.close()
+                except Exception:
+                    pass
+                    
+                human_delay(3.0, 6.0)
+                
+            failed_profiles = still_failed
+            if not failed_profiles:
+                logger.info(f"All previously failed accounts succeeded on retry round {retry_round}!")
+                break
     finally:
         if browser_started:
             if hold_open > 0:
                 logger.info(f"Holding browser open for {hold_open} seconds...")
                 time.sleep(hold_open)
             logger.info("Cleaning up and closing browser...")
-            context.close()
-            browser.close()
-            p_inst.stop()
+            try:
+                if context:
+                    context.close()
+            except Exception:
+                pass
+            try:
+                if browser:
+                    browser.close()
+            except Exception:
+                pass
+            try:
+                if p_inst:
+                    p_inst.stop()
+            except Exception:
+                pass
             
+    success_count = len(successful_uids)
+    failed_count = len(failed_profiles)
     logger.info(f"Execution finished. Successfully claimed for {success_count}/{len(profiles)} attempted profiles.")
     
     # 6. Record successful execution to state file if all attempted profiles succeeded

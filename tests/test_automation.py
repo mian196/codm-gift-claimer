@@ -434,3 +434,82 @@ def test_claim_profile_navigation_retry(mock_delay, mock_sleep):
     
     # Assert goto was retried
     assert mock_page.goto.call_count == 2
+
+@patch("claimer.time.sleep")
+@patch("claimer.wait_for_internet")
+@patch("claimer.load_profiles")
+@patch("claimer.init_browser")
+@patch("claimer.claim_profile")
+@patch("claimer.ensure_playwright_installed")
+@patch("claimer.human_delay")
+@patch("claimer.setup_logging")
+def test_main_failed_account_retry_success(
+    mock_setup_logging, mock_delay, mock_ensure_installed, mock_claim_profile, 
+    mock_init_browser, mock_load_profiles, mock_wait_internet, mock_sleep
+):
+    mock_wait_internet.return_value = True
+    mock_load_profiles.return_value = [
+        {"name": "Player1", "uid": "111"},
+        {"name": "Player2", "uid": "222"}
+    ]
+    
+    mock_p = MagicMock()
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_page = MagicMock()
+    mock_init_browser.return_value = (mock_p, mock_browser, mock_context, mock_page)
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = mock_page
+    
+    # Pass 1: Player1 succeeds, Player2 fails.
+    # Retry 1: Player2 succeeds.
+    mock_claim_profile.side_effect = [True, False, True]
+    
+    with patch("claimer.argparse.ArgumentParser.parse_args") as mock_args, \
+         patch("os.path.exists", return_value=False), \
+         patch("builtins.open", create=True):
+        mock_args.return_value = MagicMock(visible=False, hold_open=0)
+        claimer.main()
+        
+    assert mock_claim_profile.call_count == 3
+    # Check that 10s sleep was called for retry cooldown
+    mock_sleep.assert_any_call(10)
+
+@patch("claimer.time.sleep")
+@patch("claimer.wait_for_internet")
+@patch("claimer.load_profiles")
+@patch("claimer.init_browser")
+@patch("claimer.claim_profile")
+@patch("claimer.ensure_playwright_installed")
+@patch("claimer.human_delay")
+@patch("claimer.setup_logging")
+def test_main_failed_account_max_3_retries(
+    mock_setup_logging, mock_delay, mock_ensure_installed, mock_claim_profile, 
+    mock_init_browser, mock_load_profiles, mock_wait_internet, mock_sleep
+):
+    mock_wait_internet.return_value = True
+    mock_load_profiles.return_value = [
+        {"name": "PlayerFail", "uid": "999"}
+    ]
+    
+    mock_p = MagicMock()
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_page = MagicMock()
+    mock_init_browser.return_value = (mock_p, mock_browser, mock_context, mock_page)
+    mock_browser.new_context.return_value = mock_context
+    mock_context.new_page.return_value = mock_page
+    
+    # Initial attempt + 3 retries (all fail)
+    mock_claim_profile.side_effect = [False, False, False, False]
+    
+    with patch("claimer.argparse.ArgumentParser.parse_args") as mock_args, \
+         patch("os.path.exists", return_value=False):
+        mock_args.return_value = MagicMock(visible=False, hold_open=0)
+        claimer.main()
+        
+    # Total calls: 1 initial + 3 retries = 4
+    assert mock_claim_profile.call_count == 4
+    # Check that 10s sleep was called for each retry round (3 times)
+    assert mock_sleep.call_args_list.count(pytest.helpers.call(10) if hasattr(pytest, "helpers") else ((10,), {})) == 3 or [c[0] for c in mock_sleep.call_args_list].count((10,)) == 3
+
