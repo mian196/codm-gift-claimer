@@ -14,6 +14,7 @@ from playwright.sync_api import sync_playwright, Error
 # Initialize named logger
 logger = logging.getLogger("claimer")
 
+
 def cleanup_old_files(directory="logs", pattern_ext=".log", max_files=5):
     """
     Keeps the newest max_files in directory matching pattern_ext and deletes older files.
@@ -37,13 +38,14 @@ def cleanup_old_files(directory="logs", pattern_ext=".log", max_files=5):
     except Exception:
         pass
 
+
 def setup_logging(log_path=None, logs_dir="logs", max_logs=5):
     """
     Sets up unified logging to stdout and a per-run timestamped log file in logs_dir.
     Retains a maximum of max_logs newest log files.
     """
     os.makedirs(logs_dir, exist_ok=True)
-    
+
     # Ensure Windows console supports UTF-8 characters in stylized player nicknames
     if sys.platform == "win32":
         try:
@@ -51,32 +53,34 @@ def setup_logging(log_path=None, logs_dir="logs", max_logs=5):
                 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-            
+
     if log_path is None:
-        cleanup_old_files(directory=logs_dir, pattern_ext=".log", max_files=max(0, max_logs - 1))
+        cleanup_old_files(
+            directory=logs_dir, pattern_ext=".log", max_files=max(0, max_logs - 1)
+        )
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_path = os.path.join(logs_dir, f"claimer_{timestamp}.log")
     else:
         os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
-        
+
     logger.setLevel(logging.INFO)
-    
+
     # Avoid duplicate handlers
     if not logger.handlers:
         formatter = logging.Formatter(
-            fmt="%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
+            fmt="%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
-        
+
         # Stream handler for stdout
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(formatter)
         logger.addHandler(stream_handler)
-        
+
         # File handler for log file
         file_handler = logging.FileHandler(log_path, encoding="utf-8")
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+
 
 def check_internet_connection(timeout=5):
     """
@@ -95,6 +99,7 @@ def check_internet_connection(timeout=5):
     except Exception:
         return False
 
+
 def wait_for_internet(max_timeout=60):
     """
     Loops check_internet_connection() with exponential backoff.
@@ -103,27 +108,30 @@ def wait_for_internet(max_timeout=60):
     """
     start_time = time.time()
     sleep_interval = 5
-    
+
     if check_internet_connection():
         return True
-        
+
     while True:
         elapsed = time.time() - start_time
         remaining = max_timeout - elapsed
         if remaining <= 0:
             break
-            
+
         current_sleep = min(sleep_interval, remaining)
         logger.warning(f"Internet offline. Retrying in {current_sleep:.1f} seconds...")
         time.sleep(current_sleep)
-        
+
         if check_internet_connection():
             return True
-            
+
         sleep_interval *= 2
-        
-    logger.error(f"Failed to establish internet connection to store.callofdutymobile.com within {max_timeout} seconds.")
+
+    logger.error(
+        f"Failed to establish internet connection to store.callofdutymobile.com within {max_timeout} seconds."
+    )
     return False
+
 
 def mask_name(name):
     """Masks a player name for logging security (e.g., 'PlayerNickname' -> 'Pl************')."""
@@ -133,6 +141,7 @@ def mask_name(name):
         return name[0] + "*"
     return name[:2] + "*" * (len(name) - 2)
 
+
 def mask_uid(uid):
     """Masks a player UID for logging security (e.g., '123456789' -> '123***789')."""
     if not uid:
@@ -141,7 +150,9 @@ def mask_uid(uid):
         return uid[:2] + "*" * (len(uid) - 2)
     return uid[:3] + "*" * (len(uid) - 6) + uid[-3:]
 
+
 SETTINGS = {}
+
 
 def load_settings():
     """
@@ -153,13 +164,16 @@ def load_settings():
         try:
             with open(local_path, "r", encoding="utf-8") as f:
                 SETTINGS = json.load(f)
-                logger.info("Successfully loaded settings from local config/settings.json.")
+                logger.info(
+                    "Successfully loaded settings from local config/settings.json."
+                )
                 return
         except Exception as e:
             logger.error(f"Failed to parse config/settings.json: {e}")
-            
+
     # Fallback/Empty settings
     SETTINGS = {}
+
 
 def load_profiles():
     """
@@ -174,7 +188,9 @@ def load_profiles():
             with open(local_path, "r", encoding="utf-8") as f:
                 profiles = json.load(f)
                 if isinstance(profiles, list):
-                    logger.info("Successfully loaded profiles from local config/profiles.json.")
+                    logger.info(
+                        "Successfully loaded profiles from local config/profiles.json."
+                    )
                     return profiles
                 else:
                     logger.error("local config/profiles.json is not a JSON array.")
@@ -187,15 +203,22 @@ def load_profiles():
         try:
             profiles = json.loads(env_profiles)
             if isinstance(profiles, list):
-                logger.info("Successfully loaded profiles from CODM_PROFILES environment variable.")
+                logger.info(
+                    "Successfully loaded profiles from CODM_PROFILES environment variable."
+                )
                 return profiles
             else:
                 logger.error("CODM_PROFILES environment variable is not a JSON array.")
         except Exception as e:
-            logger.error(f"Failed to parse CODM_PROFILES environment variable JSON: {e}")
+            logger.error(
+                f"Failed to parse CODM_PROFILES environment variable JSON: {e}"
+            )
 
-    logger.error("No profiles found (neither config/profiles.json nor CODM_PROFILES env var is available).")
+    logger.error(
+        "No profiles found (neither config/profiles.json nor CODM_PROFILES env var is available)."
+    )
     return []
+
 
 def send_discord_notification(webhook_url, player_name, uid, status, error_msg=None):
     """
@@ -203,35 +226,43 @@ def send_discord_notification(webhook_url, player_name, uid, status, error_msg=N
     """
     if not webhook_url:
         return
-        
+
     color = 3066993 if status == "success" else 15158332
-    title = "🎮 CODM Daily Free Gift Claimed!" if status == "success" else "❌ CODM Daily Free Gift Failure!"
-    description = "Successfully claimed the daily free reward on the CODM Official Store!" if status == "success" else "Failed to claim the daily free reward."
-    
+    title = (
+        "🎮 CODM Daily Free Gift Claimed!"
+        if status == "success"
+        else "❌ CODM Daily Free Gift Failure!"
+    )
+    description = (
+        "Successfully claimed the daily free reward on the CODM Official Store!"
+        if status == "success"
+        else "Failed to claim the daily free reward."
+    )
+
     embed = {
         "title": title,
         "description": description,
         "color": color,
         "fields": [
             {"name": "Player Name", "value": player_name, "inline": True},
-            {"name": "Player UID", "value": f"`{uid}`", "inline": True}
+            {"name": "Player UID", "value": f"`{uid}`", "inline": True},
         ],
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "footer": {
             "text": "CODM Daily Gift Claimer | Automated with Windows Task Scheduler"
-        }
+        },
     }
-    
+
     if error_msg:
         # Truncate message to fit Discord's embed field value limit (1024 chars)
         truncated = error_msg[:900] + "..." if len(error_msg) > 900 else error_msg
         field_name = "Gift Details" if status == "success" else "Error Details"
-        embed["fields"].append({"name": field_name, "value": f"```{truncated}```", "inline": False})
-        
-    payload = {
-        "embeds": [embed]
-    }
-    
+        embed["fields"].append(
+            {"name": field_name, "value": f"```{truncated}```", "inline": False}
+        )
+
+    payload = {"embeds": [embed]}
+
     try:
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -239,17 +270,20 @@ def send_discord_notification(webhook_url, player_name, uid, status, error_msg=N
             data=data,
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             },
-            method="POST"
+            method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as response:
             if response.status in (200, 204):
                 logger.info(f"Discord notification sent successfully ({status}).")
             else:
-                logger.warning(f"Discord Webhook returned status code: {response.status}")
+                logger.warning(
+                    f"Discord Webhook returned status code: {response.status}"
+                )
     except Exception as e:
         logger.error(f"Failed to send Discord notification: {e}")
+
 
 def ensure_playwright_installed():
     """
@@ -261,13 +295,18 @@ def ensure_playwright_installed():
             browser = p.chromium.launch(headless=True)
             browser.close()
     except Exception:
-        logger.info("Playwright Chromium browser binaries not found. Installing automatically...")
+        logger.info(
+            "Playwright Chromium browser binaries not found. Installing automatically..."
+        )
         try:
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"], check=True
+            )
             logger.info("Chromium installed successfully.")
         except subprocess.CalledProcessError as err:
             logger.error(f"Error installing Chromium: {err}")
             sys.exit(1)
+
 
 def init_browser(visible=False):
     """
@@ -282,34 +321,36 @@ def init_browser(visible=False):
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-infobars",
-            ]
+            ],
         )
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        
+
         context = browser.new_context(
             user_agent=user_agent,
             viewport={"width": 1280, "height": 720},
             device_scale_factor=1,
-            bypass_csp=True
+            bypass_csp=True,
         )
-        
+
         page = context.new_page()
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        
+        page.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+
         return p, browser, context, page
     except Exception as e:
         p.stop()
         raise e
+
 
 def human_delay(min_sec=1.0, max_sec=3.0):
     """Sleeps for a random duration to simulate human timing."""
     time.sleep(random.uniform(min_sec, max_sec))
 
 
-
 def claim_profile(page, profile, visible=False):
     """
-    Performs the full navigation, authentication, nickname verification, 
+    Performs the full navigation, authentication, nickname verification,
     and gift claiming flow for a single player profile.
     """
     name = profile.get("name", "Unknown Player")
@@ -317,14 +358,14 @@ def claim_profile(page, profile, visible=False):
     if not uid:
         logger.warning(f"Skipping profile '{mask_name(name)}' because UID is missing.")
         return False
-        
+
     logger.info(f"--- Processing Profile: {mask_name(name)} (UID: {mask_uid(uid)}) ---")
-    
+
     # Register listener to capture in-game nickname and claim API responses from store API
     in_game_nickname = None
     claim_api_success = False
     claim_api_error = None
-    
+
     def capture_network_response(res):
         nonlocal in_game_nickname, claim_api_success, claim_api_error
         try:
@@ -332,18 +373,34 @@ def claim_profile(page, profile, visible=False):
             if "validate" in url_lower and res.status == 200:
                 try:
                     data = res.json()
-                    nick = data.get("result", {}).get("nickname") or data.get("nickname")
+                    nick = data.get("result", {}).get("nickname") or data.get(
+                        "nickname"
+                    )
                     if nick:
                         in_game_nickname = nick
                 except Exception:
                     pass
-                    
+
             # Capture freebie claim API responses (e.g. claim-freebie-reward, claim_reward, /claim)
-            is_static_asset = any(url_lower.endswith(ext) or ext in url_lower for ext in [".css", ".js", ".png", ".jpg", ".svg", ".woff", ".webp"])
-            if not is_static_asset and any(kw in url_lower for kw in ["claim-freebie-reward", "claim-reward", "claim_reward", "/claim-freebie", "/claim"]):
+            is_static_asset = any(
+                url_lower.endswith(ext) or ext in url_lower
+                for ext in [".css", ".js", ".png", ".jpg", ".svg", ".woff", ".webp"]
+            )
+            if not is_static_asset and any(
+                kw in url_lower
+                for kw in [
+                    "claim-freebie-reward",
+                    "claim-reward",
+                    "claim_reward",
+                    "/claim-freebie",
+                    "/claim",
+                ]
+            ):
                 if res.status in (200, 201, 204):
                     claim_api_success = True
-                    logger.info(f"Captured successful claim API response (HTTP {res.status}) from: {res.url}")
+                    logger.info(
+                        f"Captured successful claim API response (HTTP {res.status}) from: {res.url}"
+                    )
                 else:
                     try:
                         err_json = res.json()
@@ -354,28 +411,45 @@ def claim_profile(page, profile, visible=False):
             pass
 
     page.on("response", capture_network_response)
-    
+
     try:
         # Navigate to Call of Duty: Mobile Store with auto-retry for transient network errors (e.g. ERR_NETWORK_CHANGED)
         logger.info("Navigating to Call of Duty: Mobile Store...")
         nav_success = False
         for attempt in range(1, 4):
             try:
-                page.goto("https://store.callofdutymobile.com/", wait_until="domcontentloaded", timeout=60000)
+                page.goto(
+                    "https://store.callofdutymobile.com/",
+                    wait_until="domcontentloaded",
+                    timeout=60000,
+                )
                 nav_success = True
                 break
             except Exception as nav_err:
                 if attempt < 3:
-                    logger.warning(f"Navigation attempt {attempt} failed ({nav_err}). Retrying in 4 seconds...")
+                    logger.warning(
+                        f"Navigation attempt {attempt} failed ({nav_err}). Retrying in 4 seconds..."
+                    )
                     time.sleep(4)
                 else:
                     raise nav_err
-        
+
         # Check if stuck on regional splash/loading page (/international) and wait for store redirect
         try:
-            if "international" in page.url or "Loading..." in page.content() or page.locator("text=THE WEB STORE IS AVAILABLE IN").first.is_visible():
-                logger.info("Detected regional landing/splash page, waiting for redirect to store...")
-                page.wait_for_url(lambda u: "international" not in u and "store.callofdutymobile.com" in u, timeout=15000)
+            if (
+                "international" in page.url
+                or "Loading..." in page.content()
+                or page.locator("text=THE WEB STORE IS AVAILABLE IN").first.is_visible()
+            ):
+                logger.info(
+                    "Detected regional landing/splash page, waiting for redirect to store..."
+                )
+                page.wait_for_url(
+                    lambda u: (
+                        "international" not in u and "store.callofdutymobile.com" in u
+                    ),
+                    timeout=15000,
+                )
         except Exception:
             pass
 
@@ -383,19 +457,27 @@ def claim_profile(page, profile, visible=False):
         logger.info("Waiting for page elements to load...")
         combined_load_selector = "input#userId, input[name='userId'], input[placeholder*='ID' i], span:has-text('Yes, I am.'), button:has-text('Yes, I am')"
         try:
-            page.wait_for_selector(combined_load_selector, state="visible", timeout=25000)
+            page.wait_for_selector(
+                combined_load_selector, state="visible", timeout=25000
+            )
             logger.info("Page elements loaded successfully.")
         except Exception as e:
-            logger.warning(f"Initial page load timed out or stalled ({e}). Attempting page reload...")
+            logger.warning(
+                f"Initial page load timed out or stalled ({e}). Attempting page reload..."
+            )
             try:
                 page.reload(wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_selector(combined_load_selector, state="visible", timeout=25000)
+                page.wait_for_selector(
+                    combined_load_selector, state="visible", timeout=25000
+                )
                 logger.info("Page elements loaded successfully after reload.")
             except Exception as reload_err:
-                logger.warning(f"Timeout waiting for elements after reload: {reload_err}")
-            
+                logger.warning(
+                    f"Timeout waiting for elements after reload: {reload_err}"
+                )
+
         human_delay(2.0, 4.0)
-        
+
         # Dismiss any overlay modals (privacy/age verification dialog)
         logger.info("Checking for overlay modals to dismiss...")
         overlay_selectors = [
@@ -409,14 +491,16 @@ def claim_profile(page, profile, visible=False):
             lambda p: p.locator("button:has-text('I agree')"),
             lambda p: p.locator("button:has-text('Continue')"),
         ]
-        
+
         overlay_dismissed = False
         for idx, strategy in enumerate(overlay_selectors):
             try:
                 locator = strategy(page)
                 if locator.first.is_visible():
                     human_delay(0.5, 1.5)
-                    logger.info(f"Found overlay modal button using strategy {idx + 1}. Clicking to dismiss...")
+                    logger.info(
+                        f"Found overlay modal button using strategy {idx + 1}. Clicking to dismiss..."
+                    )
                     locator.first.click(timeout=5000)
                     human_delay(1.5, 3.0)
                     overlay_dismissed = True
@@ -424,10 +508,10 @@ def claim_profile(page, profile, visible=False):
                     break
             except Exception:
                 continue
-        
+
         if not overlay_dismissed:
             logger.info("No overlay modal detected, proceeding...")
-        
+
         # Check if a second overlay appears (some sites chain modals)
         try:
             second_overlay = page.locator("#headlessui-portal-root").first
@@ -440,7 +524,7 @@ def claim_profile(page, profile, visible=False):
                     human_delay(1.5, 2.5)
         except Exception:
             pass
-        
+
         # Locate UID Input Field (Multi-strategy)
         logger.info("Locating Player ID input field...")
         uid_field = None
@@ -455,10 +539,13 @@ def claim_profile(page, profile, visible=False):
             lambda p: p.locator("input[type='text']").first,
             lambda p: p.locator("input#userid"),
         ]
-        
+
         # Wait up to 15 seconds for UID input field to become visible
         try:
-            page.wait_for_selector("input#userId, input[name='userId'], input[placeholder*='ID' i]", timeout=15000)
+            page.wait_for_selector(
+                "input#userId, input[name='userId'], input[placeholder*='ID' i]",
+                timeout=15000,
+            )
         except Exception:
             pass
 
@@ -471,15 +558,15 @@ def claim_profile(page, profile, visible=False):
                     break
             except Exception:
                 continue
-                
+
         if not uid_field:
             raise Exception("Failed to locate the UID input field on the page.")
-            
+
         # Simulating human-like input typing with micro-delays
         logger.info("Typing Player UID...")
-        human_delay(1.0, 2.5) # Stealth delay before clicking UID field
+        human_delay(1.0, 2.5)  # Stealth delay before clicking UID field
         uid_field.click()
-        uid_field.fill("") # Clear input first
+        uid_field.fill("")  # Clear input first
         human_delay(0.5, 1.0)
         try:
             uid_field.press_sequentially(uid, delay=random.uniform(50, 100))
@@ -490,9 +577,9 @@ def claim_profile(page, profile, visible=False):
                 for char in uid:
                     uid_field.type(char)
                     time.sleep(random.uniform(0.05, 0.15))
-            
+
         human_delay(1.0, 2.5)
-        
+
         # Locate and Click Login Button (Multi-strategy)
         logger.info("Locating Login button...")
         login_btn = None
@@ -504,7 +591,7 @@ def claim_profile(page, profile, visible=False):
             lambda p: p.locator("button[type='submit']"),
             lambda p: p.locator(".login-btn"),
         ]
-        
+
         for idx, strategy in enumerate(login_selectors):
             try:
                 locator = strategy(page)
@@ -514,63 +601,79 @@ def claim_profile(page, profile, visible=False):
                     break
             except Exception:
                 continue
-                
+
         if login_btn:
-            human_delay(1.2, 2.8) # Stealth delay before clicking Login button
+            human_delay(1.2, 2.8)  # Stealth delay before clicking Login button
             logger.info("Clicking Login...")
             login_btn.click()
             human_delay(2.0, 4.0)
         else:
-            logger.info("No explicit Login button found on the page. Triggering input validation...")
+            logger.info(
+                "No explicit Login button found on the page. Triggering input validation..."
+            )
             try:
                 uid_field.press("Enter")
-                uid_field.evaluate("el => el.dispatchEvent(new Event('blur', { bubbles: true }))")
+                uid_field.evaluate(
+                    "el => el.dispatchEvent(new Event('blur', { bubbles: true }))"
+                )
                 human_delay(2.0, 4.0)
             except Exception as press_err:
                 logger.warning(f"Could not trigger blur on UID field: {press_err}")
-        
+
         # Verify Player Nickname / Validation response
         logger.info("Verifying player authentication...")
         human_delay(1.5, 3.0)
         if in_game_nickname:
-            logger.info(f"Validated player on store: In-game Nickname '{mask_name(in_game_nickname)}' (Profile label: '{mask_name(name)}')")
+            logger.info(
+                f"Validated player on store: In-game Nickname '{mask_name(in_game_nickname)}' (Profile label: '{mask_name(name)}')"
+            )
         else:
             logger.info(f"Proceeding with profile '{mask_name(name)}'...")
 
         # Loop to locate and claim ALL available unclaimed gifts
         gift_index = 0
         claimed_gifts_count = 0
-        
+
         while True:
             human_delay(1.5, 3.0)
-            
+
             # Ensure any open modals/dialogs from previous attempts are closed
             try:
-                close_btn = page.locator("[class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X'), [role='dialog'] button:has-text('✕'), button:has-text('GO BACK'), button:has-text('CONTINUE BROWSING')").first
+                close_btn = page.locator(
+                    "[class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X'), [role='dialog'] button:has-text('✕'), button:has-text('GO BACK'), button:has-text('CONTINUE BROWSING')"
+                ).first
                 if close_btn.is_visible():
-                    logger.info("Found an open dialog. Closing it to ensure clean state...")
+                    logger.info(
+                        "Found an open dialog. Closing it to ensure clean state..."
+                    )
                     close_btn.click(timeout=3000)
                     human_delay(1.5, 2.5)
             except Exception:
                 pass
-                
+
             # Wait up to 15 seconds for freebie gift cards to render on slow connections
             try:
-                page.wait_for_selector(".sku-card--freebie", state="attached", timeout=15000)
+                page.wait_for_selector(
+                    ".sku-card--freebie", state="attached", timeout=15000
+                )
             except Exception:
                 pass
-                
+
             # Locate all free gift containers dynamically to prevent stale element references
             gift_cards = page.locator(".sku-card--freebie").all()
-            
+
             if not gift_cards:
-                raise Exception("Failed to locate any Daily Free Gift card elements (.sku-card--freebie) on the page.")
-                
+                raise Exception(
+                    "Failed to locate any Daily Free Gift card elements (.sku-card--freebie) on the page."
+                )
+
             logger.info(f"Detected {len(gift_cards)} free gifts in the store.")
-            
+
             if gift_index >= len(gift_cards):
                 if claimed_gifts_count > 0:
-                    logger.info(f"Finished processing available gifts for profile '{mask_name(name)}'. Total newly claimed: {claimed_gifts_count}")
+                    logger.info(
+                        f"Finished processing available gifts for profile '{mask_name(name)}'. Total newly claimed: {claimed_gifts_count}"
+                    )
                     return True
                 else:
                     # Check if all gifts were already claimed (no claims performed, but cards were present)
@@ -580,17 +683,21 @@ def claim_profile(page, profile, visible=False):
                         if not ("Claimed" in card_text or "CLAIMED" in card_text):
                             all_claimed = False
                             break
-                            
+
                     if all_claimed:
-                        logger.info(f"All available free gifts have already been claimed today for '{mask_name(name)}'.")
+                        logger.info(
+                            f"All available free gifts have already been claimed today for '{mask_name(name)}'."
+                        )
                         return True
                     else:
-                        logger.info(f"No unclaimed free gifts available for '{mask_name(name)}'.")
+                        logger.info(
+                            f"No unclaimed free gifts available for '{mask_name(name)}'."
+                        )
                         return True
 
             card = gift_cards[gift_index]
             card_text = card.inner_text() or ""
-            
+
             # Extract card title for descriptive logging
             card_title = f"Gift #{gift_index + 1}"
             try:
@@ -599,60 +706,70 @@ def claim_profile(page, profile, visible=False):
                     card_title = title_loc.text_content().strip()
             except Exception:
                 pass
-                
-            logger.info(f"Processing gift card '{card_title}' (Index: {gift_index + 1} of {len(gift_cards)})...")
-            
+
+            logger.info(
+                f"Processing gift card '{card_title}' (Index: {gift_index + 1} of {len(gift_cards)})..."
+            )
+
             # Check if this specific card is already claimed
             if "Claimed" in card_text or "CLAIMED" in card_text:
                 logger.info(f"'{card_title}' is already claimed today. Skipping...")
                 gift_index += 1
                 continue
-                
+
             # Locate the "CLAIM GIFT" button within this card container
             claim_element = card.locator("text=CLAIM GIFT").first
             if not claim_element.is_visible():
-                logger.warning(f"Could not find visible 'CLAIM GIFT' button in '{card_title}'. Skipping...")
+                logger.warning(
+                    f"Could not find visible 'CLAIM GIFT' button in '{card_title}'. Skipping..."
+                )
                 gift_index += 1
                 continue
-                
+
             logger.info(f"'{card_title}' is unclaimed! Claiming it now...")
             logger.info("Waiting to trigger claim click...")
             human_delay(1.5, 3.0)
-            
+
             logger.info(f"Clicking claim button for '{card_title}'...")
             claim_element.click()
             human_delay(2.0, 4.0)
-            
+
             # Check for and handle any confirmation popups/dialogs
             logger.info("Checking for confirmation dialogs...")
-            
+
             # Wait for either the confirmation button or the ineligibility block to appear in the dialog
             logger.info("Waiting for confirmation dialog contents to load...")
             combined_dialog_selector = "[role='dialog'] button:has-text('CLAIM GIFT'), [class*='modal' i] button:has-text('CLAIM GIFT'), *:has-text('Sorry, you are not eligible'), *:has-text('not eligible to claim')"
             try:
-                page.wait_for_selector(combined_dialog_selector, state="visible", timeout=12000)
+                page.wait_for_selector(
+                    combined_dialog_selector, state="visible", timeout=12000
+                )
                 logger.info("Confirmation dialog contents loaded successfully.")
             except Exception as e:
-                logger.warning(f"Timeout or error waiting for confirmation dialog contents: {e}")
-                
+                logger.warning(
+                    f"Timeout or error waiting for confirmation dialog contents: {e}"
+                )
+
             # Check if the dialog displays an ineligibility message (already claimed today or locked)
             ineligible_selectors = [
                 "Sorry, you are not eligible",
                 "not eligible to claim",
                 "limit reached",
-                "already claimed"
+                "already claimed",
             ]
-            
+
             ineligible_detected = False
             for text in ineligible_selectors:
                 try:
                     if page.locator(f"text={text}").first.is_visible():
-                        logger.info(f"Detected eligibility block in dialog: '{text}' (This gift has already been claimed today or is locked).")
+                        logger.info(
+                            f"Detected eligibility block in dialog: '{text}' (This gift has already been claimed today or is locked)."
+                        )
                         ineligible_detected = True
                         break
                 except Exception:
                     continue
-                    
+
             if ineligible_detected:
                 # Click "GO BACK" or close modal to clean up if possible
                 try:
@@ -661,7 +778,9 @@ def claim_profile(page, profile, visible=False):
                 except Exception:
                     pass
                 try:
-                    page.locator("[class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X'), [role='dialog'] button:has-text('✕')").first.click(timeout=2000)
+                    page.locator(
+                        "[class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X'), [role='dialog'] button:has-text('✕')"
+                    ).first.click(timeout=2000)
                 except Exception:
                     pass
                 logger.info("Skipping this locked/claimed gift.")
@@ -672,8 +791,14 @@ def claim_profile(page, profile, visible=False):
                 lambda p: p.locator("[role='dialog'] button:has-text('CLAIM GIFT')"),
                 lambda p: p.locator("[class*='modal' i] button:has-text('CLAIM GIFT')"),
                 lambda p: p.locator("[class*='popup' i] button:has-text('CLAIM GIFT')"),
-                lambda p: p.locator("[class*='dialog' i] button:has-text('CLAIM GIFT')"),
-                lambda p: p.locator("div").filter(has_text="You are about to claim your Gift").locator("button:has-text('CLAIM GIFT')"),
+                lambda p: p.locator(
+                    "[class*='dialog' i] button:has-text('CLAIM GIFT')"
+                ),
+                lambda p: (
+                    p.locator("div")
+                    .filter(has_text="You are about to claim your Gift")
+                    .locator("button:has-text('CLAIM GIFT')")
+                ),
                 lambda p: p.get_by_role("button", name="Confirm"),
                 lambda p: p.get_by_role("button", name="OK"),
                 lambda p: p.get_by_role("button", name="Yes"),
@@ -686,7 +811,7 @@ def claim_profile(page, profile, visible=False):
                 lambda p: p.locator(".modal-confirm-btn"),
                 lambda p: p.locator(".confirm-btn"),
             ]
-            
+
             confirm_btn = None
             for idx, strategy in enumerate(confirm_selectors):
                 try:
@@ -695,34 +820,40 @@ def claim_profile(page, profile, visible=False):
                         candidate_btn = locator.first
                         btn_text = candidate_btn.text_content() or ""
                         confirm_btn = candidate_btn
-                        logger.info(f"Found confirmation button using strategy {idx + 1}: '{btn_text}'")
+                        logger.info(
+                            f"Found confirmation button using strategy {idx + 1}: '{btn_text}'"
+                        )
                         break
                 except Exception:
                     continue
-                    
+
             # Reset claim API flag before confirmation
             claim_api_success = False
             claim_api_error = None
 
             if confirm_btn:
-                human_delay(1.0, 2.5) # Stealth delay before clicking Confirmation button
+                human_delay(
+                    1.0, 2.5
+                )  # Stealth delay before clicking Confirmation button
                 logger.info("Clicking confirmation button...")
                 confirm_btn.click()
-            
+
             # Verify claim success with multi-strategy polling (API response + DOM success indicators + Card text update)
             logger.info("Verifying claim success...")
-            
+
             success_detected = False
             ineligible_detected_post = False
-            
+
             poll_start = time.time()
             while time.time() - poll_start < 8.0:
                 # Strategy 1: Network API response captured
                 if claim_api_success:
-                    logger.info("Success confirmation detected: API returned 200 OK for freebie claim.")
+                    logger.info(
+                        "Success confirmation detected: API returned 200 OK for freebie claim."
+                    )
                     success_detected = True
                     break
-                    
+
                 # Strategy 2: Modal Success indicators & 'CONTINUE BROWSING' button
                 success_indicators = [
                     lambda p: p.locator("button:has-text('CONTINUE BROWSING')"),
@@ -734,20 +865,22 @@ def claim_profile(page, profile, visible=False):
                     lambda p: p.locator("text=/congratulations/i"),
                     lambda p: p.locator("text=/enjoy your gift/i"),
                 ]
-                
+
                 for indicator in success_indicators:
                     try:
                         loc = indicator(page)
                         if loc.first.is_visible():
-                            logger.info("Success confirmation detected inside modal/page via UI indicator.")
+                            logger.info(
+                                "Success confirmation detected inside modal/page via UI indicator."
+                            )
                             success_detected = True
                             break
                     except Exception:
                         continue
-                        
+
                 if success_detected:
                     break
-                    
+
                 # Strategy 3: Check for modal ineligibility / already claimed
                 ineligible_post_indicators = [
                     lambda p: p.locator("text=/not eligible/i"),
@@ -758,38 +891,55 @@ def claim_profile(page, profile, visible=False):
                     try:
                         loc = inelig(page)
                         if loc.first.is_visible():
-                            logger.info(f"Modal response: Gift '{card_title}' was already claimed today or is locked.")
+                            logger.info(
+                                f"Modal response: Gift '{card_title}' was already claimed today or is locked."
+                            )
                             ineligible_detected_post = True
                             break
                     except Exception:
                         continue
-                        
+
                 if ineligible_detected_post:
                     break
-                    
+
                 # Strategy 4: Check if current card updated to 'Claimed'
                 try:
                     current_card = page.locator(".sku-card--freebie").nth(gift_index)
                     if current_card.is_visible():
                         current_card_text = current_card.inner_text() or ""
-                        if "claimed" in current_card_text.lower() and "claim gift" not in current_card_text.lower():
-                            logger.info("Success confirmation detected: Store card updated to 'Claimed'.")
+                        if (
+                            "claimed" in current_card_text.lower()
+                            and "claim gift" not in current_card_text.lower()
+                        ):
+                            logger.info(
+                                "Success confirmation detected: Store card updated to 'Claimed'."
+                            )
                             success_detected = True
                             break
                 except Exception:
                     pass
-                    
+
                 time.sleep(0.5)
-                    
-            webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
-            
+
+            webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get(
+                "DISCORD_WEBHOOK_URL"
+            )
+
             if success_detected:
                 display_nick = in_game_nickname if in_game_nickname else name
-                logger.info(f"Successfully claimed '{card_title}' for {mask_name(display_nick)} ({mask_uid(uid)})!")
+                logger.info(
+                    f"Successfully claimed '{card_title}' for {mask_name(display_nick)} ({mask_uid(uid)})!"
+                )
                 claimed_gifts_count += 1
                 if webhook_url:
-                    send_discord_notification(webhook_url, display_nick, uid, "success", error_msg=f"Successfully claimed free gift '{card_title}'!")
-                
+                    send_discord_notification(
+                        webhook_url,
+                        display_nick,
+                        uid,
+                        "success",
+                        error_msg=f"Successfully claimed free gift '{card_title}'!",
+                    )
+
                 # Safely dismiss the CP buy popup / modal if visible
                 try:
                     close_selectors = [
@@ -806,7 +956,9 @@ def claim_profile(page, profile, visible=False):
                             locator = strategy(page)
                             if locator.first.is_visible():
                                 human_delay(0.8, 1.8)
-                                logger.info(f"Closing success popup using selector strategy {idx + 1}...")
+                                logger.info(
+                                    f"Closing success popup using selector strategy {idx + 1}..."
+                                )
                                 locator.first.click(timeout=3000)
                                 human_delay(1.0, 2.0)
                                 break
@@ -814,12 +966,14 @@ def claim_profile(page, profile, visible=False):
                             continue
                 except Exception as close_err:
                     logger.warning(f"Could not dismiss success popup: {close_err}")
-                
+
                 # Move to next gift
                 gift_index += 1
             elif ineligible_detected_post:
                 try:
-                    page.locator("button:has-text('GO BACK'), [class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X')").first.click(timeout=2000)
+                    page.locator(
+                        "button:has-text('GO BACK'), [class*='modal' i] button:has-text('✕'), [class*='modal' i] button:has-text('X')"
+                    ).first.click(timeout=2000)
                 except Exception:
                     pass
                 gift_index += 1
@@ -827,25 +981,43 @@ def claim_profile(page, profile, visible=False):
                 # Final check before giving up: check if store card is now Claimed
                 try:
                     current_card = page.locator(".sku-card--freebie").nth(gift_index)
-                    if current_card.is_visible() and "claimed" in (current_card.inner_text() or "").lower():
-                        logger.info("Late confirmation: Store card is marked 'Claimed'.")
+                    if (
+                        current_card.is_visible()
+                        and "claimed" in (current_card.inner_text() or "").lower()
+                    ):
+                        logger.info(
+                            "Late confirmation: Store card is marked 'Claimed'."
+                        )
                         display_nick = in_game_nickname if in_game_nickname else name
-                        logger.info(f"Successfully claimed '{card_title}' for {mask_name(display_nick)} ({mask_uid(uid)})!")
+                        logger.info(
+                            f"Successfully claimed '{card_title}' for {mask_name(display_nick)} ({mask_uid(uid)})!"
+                        )
                         claimed_gifts_count += 1
                         if webhook_url:
-                            send_discord_notification(webhook_url, display_nick, uid, "success", error_msg=f"Successfully claimed free gift '{card_title}'!")
+                            send_discord_notification(
+                                webhook_url,
+                                display_nick,
+                                uid,
+                                "success",
+                                error_msg=f"Successfully claimed free gift '{card_title}'!",
+                            )
                         gift_index += 1
                         continue
                 except Exception:
                     pass
-                    
-                logger.warning(f"Warning: Could not confirm claim success for '{card_title}' on profile {mask_name(name)}.")
+
+                logger.warning(
+                    f"Warning: Could not confirm claim success for '{card_title}' on profile {mask_name(name)}."
+                )
                 gift_index += 1
     except Exception as e:
         logger.error(f"Error claiming gift for profile '{mask_name(name)}': {e}")
         try:
             os.makedirs("logs", exist_ok=True)
-            safe_name = "".join(c for c in name if c.isalnum() or c in ("-", "_")).strip() or "account"
+            safe_name = (
+                "".join(c for c in name if c.isalnum() or c in ("-", "_")).strip()
+                or "account"
+            )
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             screenshot_path = os.path.join("logs", f"error_{safe_name}_{timestamp}.png")
             page.screenshot(path=screenshot_path)
@@ -853,35 +1025,41 @@ def claim_profile(page, profile, visible=False):
             cleanup_old_files(directory="logs", pattern_ext=".png", max_files=10)
         except Exception as screenshot_err:
             logger.warning(f"Could not take error screenshot: {screenshot_err}")
-        webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL")
+        webhook_url = SETTINGS.get("DISCORD_WEBHOOK_URL") or os.environ.get(
+            "DISCORD_WEBHOOK_URL"
+        )
         if webhook_url:
-            send_discord_notification(webhook_url, name, uid, "failed", error_msg=str(e))
+            send_discord_notification(
+                webhook_url, name, uid, "failed", error_msg=str(e)
+            )
         return False
 
 
-
 def main():
-    parser = argparse.ArgumentParser(description="Call of Duty: Mobile Store Daily Free Gift Claimer")
+    parser = argparse.ArgumentParser(
+        description="Call of Duty: Mobile Store Daily Free Gift Claimer"
+    )
     parser.add_argument(
-        "--visible", "-v", 
-        action="store_true", 
-        help="Run browser headfully (visible window) for debugging."
+        "--visible",
+        "-v",
+        action="store_true",
+        help="Run browser headfully (visible window) for debugging.",
     )
     parser.add_argument(
         "--hold-open",
         type=int,
         default=0,
-        help="Keep the browser open for this many seconds before cleanup."
+        help="Keep the browser open for this many seconds before cleanup.",
     )
     args = parser.parse_args()
     hold_open = int(getattr(args, "hold_open", 0) or 0)
-    
+
     # 1. Setup Logging
     setup_logging()
-    
+
     # 2. Load settings from local config/settings.json
     load_settings()
-    
+
     # 3. Sub-millisecond state check: Exit instantly if already successfully claimed today
     state_path = os.path.join("config", "state.json")
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -890,44 +1068,48 @@ def main():
             with open(state_path, "r", encoding="utf-8") as f:
                 state_data = json.load(f)
                 if state_data.get("last_successful_claim") == today_str:
-                    logger.info(f"Daily Free Gift already successfully claimed today ({today_str}). Exiting immediately to save resources.")
+                    logger.info(
+                        f"Daily Free Gift already successfully claimed today ({today_str}). Exiting immediately to save resources."
+                    )
                     sys.exit(0)
         except Exception as state_err:
             logger.warning(f"Could not read state file: {state_err}")
-            
+
     # 4. Start internet connectivity check with backoff retry
     if not wait_for_internet():
         logger.error("Internet connectivity check failed. Exiting.")
         sys.exit(1)
-        
+
     profiles = load_profiles()
     if not profiles:
         logger.info("No profiles loaded. Exiting.")
         sys.exit(0)
-        
+
     logger.info(f"Loaded {len(profiles)} profiles.")
-    
+
     # Auto-ensure Playwright browser binaries
     ensure_playwright_installed()
-    
+
     # 5. Iterate profiles and claim
     browser_started = False
     p_inst, browser, context, page = None, None, None, None
     successful_uids = set()
     failed_profiles = []
-    
+
     max_retries = int(SETTINGS.get("MAX_FAIL_RETRIES", 3))
     retry_delay_sec = int(SETTINGS.get("FAIL_RETRY_DELAY", 10))
-    
+
     try:
         # Pass 1: Initial attempt for all loaded profiles
         for profile in profiles:
             uid = profile.get("uid")
             name = profile.get("name", "Unknown Player")
             if not uid:
-                logger.warning(f"Skipping profile '{mask_name(name)}' because UID is missing.")
+                logger.warning(
+                    f"Skipping profile '{mask_name(name)}' because UID is missing."
+                )
                 continue
-                
+
             # Initialize browser on demand
             if not browser_started:
                 p_inst, browser, context, page = init_browser(visible=args.visible)
@@ -939,18 +1121,20 @@ def main():
                     user_agent=user_agent,
                     viewport={"width": 1280, "height": 720},
                     device_scale_factor=1,
-                    bypass_csp=True
+                    bypass_csp=True,
                 )
                 page = context.new_page()
-                page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                
+                page.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                )
+
             success = claim_profile(page, profile, visible=args.visible)
-            
+
             if success:
                 successful_uids.add(uid)
             else:
                 failed_profiles.append(profile)
-                
+
             # Close the page and context to ensure clean session state for the next profile
             try:
                 page.close()
@@ -960,7 +1144,7 @@ def main():
                 context.close()
             except Exception:
                 pass
-                
+
             human_delay(3.0, 6.0)
 
         # Retry loop for failed accounts: after doing all accounts, retry failed accounts with a 10-second wait between attempts (max 3 retries)
@@ -972,33 +1156,41 @@ def main():
                 f"Waiting {retry_delay_sec} seconds before retry round {retry_round}/{max_retries}..."
             )
             time.sleep(retry_delay_sec)
-            
+
             still_failed = []
             for profile in failed_profiles:
                 uid = profile.get("uid")
                 name = profile.get("name", "Unknown Player")
-                logger.info(f"Retrying failed profile '{mask_name(name)}' (UID: {mask_uid(uid)}) [Attempt {retry_round}/{max_retries}]...")
-                
+                logger.info(
+                    f"Retrying failed profile '{mask_name(name)}' (UID: {mask_uid(uid)}) [Attempt {retry_round}/{max_retries}]..."
+                )
+
                 # Create a fresh, isolated context and page for retried profile
                 user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 context = browser.new_context(
                     user_agent=user_agent,
                     viewport={"width": 1280, "height": 720},
                     device_scale_factor=1,
-                    bypass_csp=True
+                    bypass_csp=True,
                 )
                 page = context.new_page()
-                page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-                
+                page.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                )
+
                 success = claim_profile(page, profile, visible=args.visible)
-                
+
                 if success:
-                    logger.info(f"Retry succeeded for profile '{mask_name(name)}' on attempt {retry_round}!")
+                    logger.info(
+                        f"Retry succeeded for profile '{mask_name(name)}' on attempt {retry_round}!"
+                    )
                     successful_uids.add(uid)
                 else:
-                    logger.warning(f"Retry failed for profile '{mask_name(name)}' on attempt {retry_round}.")
+                    logger.warning(
+                        f"Retry failed for profile '{mask_name(name)}' on attempt {retry_round}."
+                    )
                     still_failed.append(profile)
-                    
+
                 try:
                     page.close()
                 except Exception:
@@ -1007,12 +1199,14 @@ def main():
                     context.close()
                 except Exception:
                     pass
-                    
+
                 human_delay(3.0, 6.0)
-                
+
             failed_profiles = still_failed
             if not failed_profiles:
-                logger.info(f"All previously failed accounts succeeded on retry round {retry_round}!")
+                logger.info(
+                    f"All previously failed accounts succeeded on retry round {retry_round}!"
+                )
                 break
     finally:
         if browser_started:
@@ -1035,20 +1229,25 @@ def main():
                     p_inst.stop()
             except Exception:
                 pass
-            
+
     success_count = len(successful_uids)
     failed_count = len(failed_profiles)
-    logger.info(f"Execution finished. Successfully claimed for {success_count}/{len(profiles)} attempted profiles.")
-    
+    logger.info(
+        f"Execution finished. Successfully claimed for {success_count}/{len(profiles)} attempted profiles."
+    )
+
     # 6. Record successful execution to state file if all attempted profiles succeeded
     if failed_count == 0 and success_count > 0:
         try:
             os.makedirs("config", exist_ok=True)
             with open(state_path, "w", encoding="utf-8") as f:
                 json.dump({"last_successful_claim": today_str}, f, indent=2)
-            logger.info(f"All active claims completed successfully today ({today_str}). State updated.")
+            logger.info(
+                f"All active claims completed successfully today ({today_str}). State updated."
+            )
         except Exception as state_err:
             logger.warning(f"Could not write state file: {state_err}")
+
 
 if __name__ == "__main__":
     main()
