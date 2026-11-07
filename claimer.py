@@ -1,15 +1,16 @@
-import os
-import sys
-import json
-import random
-import time
 import argparse
-import subprocess
-import urllib.request
-import urllib.error
+import json
 import logging
-from datetime import datetime, timezone
-from playwright.sync_api import sync_playwright, Error
+import os
+import random
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import UTC, datetime
+
+from playwright.sync_api import sync_playwright
 
 # Initialize named logger
 logger = logging.getLogger("claimer")
@@ -98,6 +99,14 @@ def check_internet_connection(timeout=5):
             return response.status == 200
     except Exception:
         return False
+
+
+def get_utc_date_str():
+    """
+    Returns the current UTC date string (YYYY-MM-DD).
+    CODM web store daily free gift code system resets globally at 00:00 UTC.
+    """
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def wait_for_internet(max_timeout=60):
@@ -247,7 +256,7 @@ def send_discord_notification(webhook_url, player_name, uid, status, error_msg=N
             {"name": "Player Name", "value": player_name, "inline": True},
             {"name": "Player UID", "value": f"`{uid}`", "inline": True},
         ],
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "footer": {
             "text": "CODM Daily Gift Claimer | Automated with Windows Task Scheduler"
         },
@@ -338,9 +347,9 @@ def init_browser(visible=False):
         )
 
         return p, browser, context, page
-    except Exception as e:
+    except Exception:
         p.stop()
-        raise e
+        raise
 
 
 def human_delay(min_sec=1.0, max_sec=3.0):
@@ -415,7 +424,6 @@ def claim_profile(page, profile, visible=False):
     try:
         # Navigate to Call of Duty: Mobile Store with auto-retry for transient network errors (e.g. ERR_NETWORK_CHANGED)
         logger.info("Navigating to Call of Duty: Mobile Store...")
-        nav_success = False
         for attempt in range(1, 4):
             try:
                 page.goto(
@@ -423,7 +431,6 @@ def claim_profile(page, profile, visible=False):
                     wait_until="domcontentloaded",
                     timeout=60000,
                 )
-                nav_success = True
                 break
             except Exception as nav_err:
                 if attempt < 3:
@@ -432,7 +439,7 @@ def claim_profile(page, profile, visible=False):
                     )
                     time.sleep(4)
                 else:
-                    raise nav_err
+                    raise
 
         # Check if stuck on regional splash/loading page (/international) and wait for store redirect
         try:
@@ -688,12 +695,12 @@ def claim_profile(page, profile, visible=False):
                         logger.info(
                             f"All available free gifts have already been claimed today for '{mask_name(name)}'."
                         )
-                        return True
+                        return "already_claimed"
                     else:
                         logger.info(
                             f"No unclaimed free gifts available for '{mask_name(name)}'."
                         )
-                        return True
+                        return "already_claimed"
 
             card = gift_cards[gift_index]
             card_text = card.inner_text() or ""
@@ -1051,8 +1058,15 @@ def main():
         default=0,
         help="Keep the browser open for this many seconds before cleanup.",
     )
+    parser.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="Bypass daily state check to force execution.",
+    )
     args = parser.parse_args()
     hold_open = int(getattr(args, "hold_open", 0) or 0)
+    bypass_state_check = bool(getattr(args, "force", False))
 
     # 1. Setup Logging
     setup_logging()
@@ -1060,16 +1074,16 @@ def main():
     # 2. Load settings from local config/settings.json
     load_settings()
 
-    # 3. Sub-millisecond state check: Exit instantly if already successfully claimed today
+    # 3. Sub-millisecond state check: Exit instantly if already successfully claimed for current UTC game date
     state_path = os.path.join("config", "state.json")
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    if os.path.exists(state_path):
+    utc_today = get_utc_date_str()
+    if not bypass_state_check and os.path.exists(state_path):
         try:
             with open(state_path, "r", encoding="utf-8") as f:
                 state_data = json.load(f)
-                if state_data.get("last_successful_claim") == today_str:
+                if state_data.get("last_successful_claim") == utc_today:
                     logger.info(
-                        f"Daily Free Gift already successfully claimed today ({today_str}). Exiting immediately to save resources."
+                        f"Daily Free Gift already successfully claimed for UTC game date ({utc_today}). Exiting immediately to save resources."
                     )
                     sys.exit(0)
         except Exception as state_err:
@@ -1090,10 +1104,11 @@ def main():
     # Auto-ensure Playwright browser binaries
     ensure_playwright_installed()
 
-    # 5. Iterate profiles and claim
+    # 6. Iterate profiles and claim
     browser_started = False
     p_inst, browser, context, page = None, None, None, None
-    successful_uids = set()
+    claimed_uids = set()
+    already_claimed_uids = set()
     failed_profiles = []
 
     max_retries = int(SETTINGS.get("MAX_FAIL_RETRIES", 3))
@@ -1128,10 +1143,12 @@ def main():
                     "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
                 )
 
-            success = claim_profile(page, profile, visible=args.visible)
+            res = claim_profile(page, profile, visible=args.visible)
 
-            if success:
-                successful_uids.add(uid)
+            if res is True:
+                claimed_uids.add(uid)
+            elif res == "already_claimed":
+                already_claimed_uids.add(uid)
             else:
                 failed_profiles.append(profile)
 
@@ -1178,13 +1195,18 @@ def main():
                     "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
                 )
 
-                success = claim_profile(page, profile, visible=args.visible)
+                res = claim_profile(page, profile, visible=args.visible)
 
-                if success:
+                if res is True:
                     logger.info(
                         f"Retry succeeded for profile '{mask_name(name)}' on attempt {retry_round}!"
                     )
-                    successful_uids.add(uid)
+                    claimed_uids.add(uid)
+                elif res == "already_claimed":
+                    logger.info(
+                        f"Retry confirmed profile '{mask_name(name)}' was already claimed on attempt {retry_round}."
+                    )
+                    already_claimed_uids.add(uid)
                 else:
                     logger.warning(
                         f"Retry failed for profile '{mask_name(name)}' on attempt {retry_round}."
@@ -1230,23 +1252,35 @@ def main():
             except Exception:
                 pass
 
-    success_count = len(successful_uids)
+    claimed_count = len(claimed_uids)
+    already_claimed_count = len(already_claimed_uids)
     failed_count = len(failed_profiles)
+
     logger.info(
-        f"Execution finished. Successfully claimed for {success_count}/{len(profiles)} attempted profiles."
+        f"Execution finished. Summary: {claimed_count} newly claimed, "
+        f"{already_claimed_count} already claimed, {failed_count} failed "
+        f"out of {len(profiles)} attempted profiles."
     )
 
-    # 6. Record successful execution to state file if all attempted profiles succeeded
-    if failed_count == 0 and success_count > 0:
+    # 6. Record successful execution to state file ONLY when new gifts were claimed and no profiles failed
+    if failed_count == 0 and claimed_count > 0:
         try:
             os.makedirs("config", exist_ok=True)
             with open(state_path, "w", encoding="utf-8") as f:
-                json.dump({"last_successful_claim": today_str}, f, indent=2)
+                json.dump({"last_successful_claim": utc_today}, f, indent=2)
             logger.info(
-                f"All active claims completed successfully today ({today_str}). State updated."
+                f"Gifts claimed successfully for UTC game date ({utc_today}). State updated."
             )
         except Exception as state_err:
             logger.warning(f"Could not write state file: {state_err}")
+    elif failed_count > 0:
+        logger.warning(
+            f"State file not updated because {failed_count} profile(s) failed."
+        )
+    elif claimed_count == 0:
+        logger.info(
+            "State file not updated because no new gifts were claimed (already claimed or none available)."
+        )
 
 
 if __name__ == "__main__":

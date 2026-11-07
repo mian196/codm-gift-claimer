@@ -1,6 +1,9 @@
 import time
+from datetime import UTC
+from unittest.mock import MagicMock, mock_open, patch
+
 import pytest
-from unittest.mock import MagicMock, patch
+
 import claimer
 
 
@@ -363,8 +366,9 @@ def test_main_internet_failure(mock_setup_logging, mock_exit, mock_wait_for_inte
     with (
         patch("claimer.argparse.ArgumentParser.parse_args") as mock_args,
         patch("os.path.exists", return_value=False),
+        patch("builtins.open", create=True),
     ):
-        mock_args.return_value = MagicMock(visible=False)
+        mock_args.return_value = MagicMock(visible=False, force=False)
         with pytest.raises(SystemExit) as excinfo:
             claimer.main()
 
@@ -408,8 +412,9 @@ def test_main_claiming(
     with (
         patch("claimer.argparse.ArgumentParser.parse_args") as mock_args,
         patch("os.path.exists", return_value=False),
+        patch("builtins.open", create=True),
     ):
-        mock_args.return_value = MagicMock(visible=False)
+        mock_args.return_value = MagicMock(visible=False, force=False)
         claimer.main()
 
     mock_setup_logging.assert_called_once()
@@ -546,7 +551,7 @@ def test_main_failed_account_retry_success(
         patch("os.path.exists", return_value=False),
         patch("builtins.open", create=True),
     ):
-        mock_args.return_value = MagicMock(visible=False, hold_open=0)
+        mock_args.return_value = MagicMock(visible=False, hold_open=0, force=False)
         claimer.main()
 
     assert mock_claim_profile.call_count == 3
@@ -589,8 +594,9 @@ def test_main_failed_account_max_3_retries(
     with (
         patch("claimer.argparse.ArgumentParser.parse_args") as mock_args,
         patch("os.path.exists", return_value=False),
+        patch("builtins.open", create=True),
     ):
-        mock_args.return_value = MagicMock(visible=False, hold_open=0)
+        mock_args.return_value = MagicMock(visible=False, hold_open=0, force=False)
         claimer.main()
 
     # Total calls: 1 initial + 3 retries = 4
@@ -603,3 +609,201 @@ def test_main_failed_account_max_3_retries(
         == 3
         or [c[0] for c in mock_sleep.call_args_list].count((10,)) == 3
     )
+
+
+# --- Tests for UTC Date Game Cycle State Tracking ---
+
+
+def test_get_utc_date_str():
+    from datetime import datetime
+
+    utc_now = datetime.now(UTC).strftime("%Y-%m-%d")
+    assert claimer.get_utc_date_str() == utc_now
+
+
+@patch("claimer.get_utc_date_str", return_value="2026-11-09")
+@patch("claimer.sys.exit")
+@patch("claimer.setup_logging")
+@patch("claimer.load_settings")
+def test_main_state_cache_exit_on_same_utc_date(
+    mock_settings, mock_setup_logging, mock_exit, mock_utc_str
+):
+    mock_exit.side_effect = SystemExit(0)
+    mock_json_content = '{"last_successful_claim": "2026-11-09"}'
+    with (
+        patch("claimer.argparse.ArgumentParser.parse_args") as mock_args,
+        patch("os.path.exists", return_value=True),
+        patch(
+            "builtins.open",
+            mock_open(read_data=mock_json_content),
+        ),
+    ):
+        mock_args.return_value = MagicMock(visible=False, hold_open=0, force=False)
+        with pytest.raises(SystemExit) as excinfo:
+            claimer.main()
+
+    assert excinfo.value.code == 0
+    mock_exit.assert_called_once_with(0)
+
+
+@patch("claimer.get_utc_date_str", return_value="2026-11-10")
+@patch("claimer.wait_for_internet", return_value=False)
+@patch("claimer.sys.exit")
+@patch("claimer.setup_logging")
+@patch("claimer.load_settings")
+def test_main_state_cache_proceeds_on_new_utc_date(
+    mock_settings, mock_setup_logging, mock_exit, mock_wait_internet, mock_utc_str
+):
+    # If state file has previous day (2026-11-09), running on new day (2026-11-10) proceeds to internet check
+    mock_exit.side_effect = SystemExit(1)
+    mock_json_content = '{"last_successful_claim": "2026-11-09"}'
+    with (
+        patch("claimer.argparse.ArgumentParser.parse_args") as mock_args,
+        patch("os.path.exists", return_value=True),
+        patch(
+            "builtins.open",
+            mock_open(read_data=mock_json_content),
+        ),
+    ):
+        mock_args.return_value = MagicMock(visible=False, hold_open=0, force=False)
+        with pytest.raises(SystemExit) as excinfo:
+            claimer.main()
+
+    assert excinfo.value.code == 1
+    mock_wait_internet.assert_called_once()
+
+
+@patch("claimer.get_utc_date_str", return_value="2026-11-09")
+@patch("claimer.wait_for_internet", return_value=False)
+@patch("claimer.sys.exit")
+@patch("claimer.setup_logging")
+@patch("claimer.load_settings")
+def test_main_force_bypasses_state_check(
+    mock_settings, mock_setup_logging, mock_exit, mock_wait_internet, mock_utc_str
+):
+    mock_exit.side_effect = SystemExit(1)
+    mock_json_content = '{"last_successful_claim": "2026-11-09"}'
+    with (
+        patch("claimer.argparse.ArgumentParser.parse_args") as mock_args,
+        patch("os.path.exists", return_value=True),
+        patch(
+            "builtins.open",
+            mock_open(read_data=mock_json_content),
+        ),
+    ):
+        mock_args.return_value = MagicMock(visible=False, hold_open=0, force=True)
+        with pytest.raises(SystemExit) as excinfo:
+            claimer.main()
+
+    assert excinfo.value.code == 1
+    mock_wait_internet.assert_called_once()
+
+
+@patch("claimer.human_delay")
+def test_claim_profile_already_claimed(mock_delay):
+    mock_page = MagicMock()
+    mock_uid_locator = MagicMock()
+    mock_uid_locator.is_visible.return_value = True
+    mock_uid_locator.first = mock_uid_locator
+    mock_page.locator.return_value = mock_uid_locator
+
+    mock_card = MagicMock()
+    mock_card.inner_text.return_value = "DAILY GIFT - Claimed"
+    mock_title = MagicMock()
+    mock_title.is_visible.return_value = True
+    mock_title.first = mock_title
+    mock_title.text_content.return_value = "DAILY GIFT"
+
+    mock_claim_btn = MagicMock()
+    mock_claim_btn.is_visible.return_value = False
+    mock_card.locator.side_effect = lambda sel: (
+        mock_title if "title" in sel else mock_claim_btn
+    )
+
+    mock_cards = MagicMock()
+    mock_cards.all.return_value = [mock_card]
+
+    def page_loc(sel):
+        if ".sku-card--freebie" in sel:
+            return mock_cards
+        return mock_uid_locator
+
+    mock_page.locator.side_effect = page_loc
+
+    profile = {"name": "Mu******", "uid": "692*************617"}
+    res = claimer.claim_profile(mock_page, profile)
+    assert res == "already_claimed"
+
+
+@patch("claimer.wait_for_internet", return_value=True)
+@patch("claimer.load_profiles")
+@patch("claimer.init_browser")
+@patch("claimer.claim_profile", return_value="already_claimed")
+@patch("claimer.ensure_playwright_installed")
+@patch("claimer.human_delay")
+@patch("claimer.setup_logging")
+def test_main_already_claimed_does_not_write_state(
+    mock_setup_logging,
+    mock_delay,
+    mock_ensure_installed,
+    mock_claim_profile,
+    mock_init_browser,
+    mock_load_profiles,
+    mock_wait_internet,
+):
+    mock_load_profiles.return_value = [{"name": "Player1", "uid": "111"}]
+    mock_p, mock_browser, mock_context, mock_page = (
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+    )
+    mock_init_browser.return_value = (mock_p, mock_browser, mock_context, mock_page)
+
+    with (
+        patch("claimer.argparse.ArgumentParser.parse_args") as mock_args,
+        patch("os.path.exists", return_value=False),
+        patch("builtins.open", create=True) as mock_open,
+    ):
+        mock_args.return_value = MagicMock(visible=False, hold_open=0, force=False)
+        claimer.main()
+
+    # state.json should NOT be written when all cards are already claimed
+    mock_open.assert_not_called()
+
+
+@patch("claimer.wait_for_internet", return_value=True)
+@patch("claimer.load_profiles")
+@patch("claimer.init_browser")
+@patch("claimer.claim_profile", return_value=True)
+@patch("claimer.ensure_playwright_installed")
+@patch("claimer.human_delay")
+@patch("claimer.setup_logging")
+def test_main_new_claim_writes_state(
+    mock_setup_logging,
+    mock_delay,
+    mock_ensure_installed,
+    mock_claim_profile,
+    mock_init_browser,
+    mock_load_profiles,
+    mock_wait_internet,
+):
+    mock_load_profiles.return_value = [{"name": "Player1", "uid": "111"}]
+    mock_p, mock_browser, mock_context, mock_page = (
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+    )
+    mock_init_browser.return_value = (mock_p, mock_browser, mock_context, mock_page)
+
+    with (
+        patch("claimer.argparse.ArgumentParser.parse_args") as mock_args,
+        patch("os.path.exists", return_value=False),
+        patch("builtins.open", create=True) as mock_open,
+    ):
+        mock_args.return_value = MagicMock(visible=False, hold_open=0, force=False)
+        claimer.main()
+
+    # state.json SHOULD be written when a new gift was claimed
+    mock_open.assert_called_once()

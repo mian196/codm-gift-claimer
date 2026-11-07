@@ -13,7 +13,7 @@ Designed to run locally on Windows, this tool automatically executes in the back
 
 ## 🌟 Key Features
 
-* **⚡ Smart Daily State Check:** Only runs a browser once a day. If launched multiple times, it exits instantly in under a millisecond to save CPU and RAM.
+* **⚡ Smart Daily State Check (UTC Game Cycle):** Aligned with the official store's global daily reset at 00:00 UTC. If launched multiple times within the same UTC game day cycle after claiming, it exits instantly in under a millisecond to save CPU and RAM.
 * **🛡️ Private & Secure:** Your player UIDs and Discord configurations are kept fully local inside your `config/` directory.
 * **💬 Discord Status Webhook Alerts:** Connect standard webhooks to receive rich status alerts showing successful claims or details of failures.
 * **🔧 One-Click Setup:** Provisioning script automatically configures Python virtual environments, browser binaries, and startup tasks.
@@ -58,6 +58,8 @@ If you want Discord status webhook alerts, open **`config/settings.json`** and a
   "DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/your_token_here"
 }
 ```
+
+> **Note on Daily Reset Cycle (UTC):** The Call of Duty: Mobile store daily gift resets globally at **00:00 UTC**. The tool automatically tracks claim state using the active UTC game date. Once gifts are claimed, it skips any further runs within that UTC cycle.
 
 *That's it! You are done.* It will now silently check and claim your rewards completely in the background every single day when your PC starts up.
 

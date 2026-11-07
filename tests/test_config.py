@@ -1,7 +1,6 @@
-import os
 import json
-import pytest
 from unittest.mock import patch
+
 from claimer import load_profiles
 
 
